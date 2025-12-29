@@ -1063,12 +1063,16 @@ def download_country_boundary(urls: List[str], cache_file: Path
 
 
 def load_country_bbox(country_name: str
-                      ) -> Optional[Tuple[float, float, float, float]]:
+                      ) -> Optional[Tuple[Tuple[float, float, float, float],
+                                          Optional]]:
     """
-    Load country bounding box from Natural Earth data.
+    Load country bounding box and geometry from Natural Earth data.
 
     Returns:
-        Tuple of (min_lon, min_lat, max_lon, max_lat) or None if not found
+        Tuple of (bbox, geometry) where:
+        - bbox: (min_lon, min_lat, max_lon, max_lat)
+        - geometry: OGR Geometry object (Polygon or MultiPolygon)
+        Returns None if not found
     """
     if not HAS_REQUESTS or not HAS_OGR:
         logger.error(
@@ -1104,10 +1108,54 @@ def load_country_bbox(country_name: str
             bbox = (envelope[0], envelope[2], envelope[1], envelope[3])
             logger.info(f"Country bbox: {bbox[0]:.3f}, {
             bbox[1]:.3f}, {bbox[2]:.3f}, {bbox[3]:.3f}")
-            return bbox
+            
+            return (bbox, geom)
 
     logger.error(f"Country '{country_name}' not found")
     return None
+
+
+def filter_tiles_by_country(tiles: List[Tuple[float, float, float, float]],
+                            country_geom) -> List[Tuple[float, float,
+                                                        float, float]]:
+    """
+    Filter tiles to only those that intersect with country geometry.
+    
+    Args:
+        tiles: List of tile bounds (left_lon, upper_lat, right_lon, lower_lat)
+        country_geom: OGR Geometry object for country
+    
+    Returns:
+        Filtered list of tiles that intersect with country
+    """
+    if country_geom is None:
+        return tiles
+    
+    logger.info(f"Filtering {len(tiles)} tiles by country intersection...")
+    
+    intersecting_tiles = []
+    
+    for left_lon, upper_lat, right_lon, lower_lat in tiles:
+        # Create tile polygon in WGS84
+        ring = ogr.Geometry(ogr.wkbLinearRing)
+        ring.AddPoint(left_lon, lower_lat)
+        ring.AddPoint(right_lon, lower_lat)
+        ring.AddPoint(right_lon, upper_lat)
+        ring.AddPoint(left_lon, upper_lat)
+        ring.AddPoint(left_lon, lower_lat)  # Close ring
+        
+        tile_geom = ogr.Geometry(ogr.wkbPolygon)
+        tile_geom.AddGeometry(ring)
+        
+        # Test intersection
+        if country_geom.Intersects(tile_geom):
+            intersecting_tiles.append((left_lon, upper_lat,
+                                      right_lon, lower_lat))
+    
+    logger.info(f"  {len(intersecting_tiles)} tiles intersect with country")
+    logger.info(f"  {len(tiles) - len(intersecting_tiles)} tiles filtered out")
+    
+    return intersecting_tiles
 
 
 def parse_args():
@@ -1223,16 +1271,18 @@ def main():
     TEMP_DIR = args.temp_dir
 
     # Determine area of interest
+    country_geom = None
     if args.bbox:
         LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = args.bbox
         logger.info(f"Using bounding box: {LON_MIN}°E to {
         LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
     elif args.country:
-        bbox = load_country_bbox(args.country)
-        if bbox is None:
+        result = load_country_bbox(args.country)
+        if result is None:
             logger.critical(
                 f"Could not load boundaries for country: {args.country}")
             sys.exit(1)
+        bbox, country_geom = result
         LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = bbox
         logger.info(f"Using country '{args.country}' bbox: {
         LON_MIN}°E to {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
@@ -1256,7 +1306,15 @@ def main():
     logger.info("Step 2: Calculating output tile grid...")
     output_tiles = get_output_tiles()
     total_output_tiles = len(output_tiles)
-    logger.info(f"Will create up to {total_output_tiles} output tile(s)")
+    logger.info(f"Generated {total_output_tiles} tiles in bounding box")
+    
+    # Filter tiles by country geometry if using --country
+    if country_geom is not None:
+        output_tiles = filter_tiles_by_country(output_tiles, country_geom)
+        logger.info(f"Will create {len(output_tiles)} output tile(s) "
+                   f"(filtered by country intersection)")
+    else:
+        logger.info(f"Will create up to {total_output_tiles} output tile(s)")
 
     # Download input tiles
     logger.info("Step 3: Downloading input tiles...")
