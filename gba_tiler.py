@@ -27,8 +27,8 @@ import io
 try:
     import ijson
 except ImportError:
-    print("Error: ijson module is required for streaming JSON parsing.")
-    print("Please install it with: pip install ijson")
+    logger.critical("Error: ijson module is required for streaming JSON parsing.")
+    logger.critical("Please install it with: pip install ijson")
     sys.exit(1)
 
 from decimal import Decimal
@@ -72,11 +72,11 @@ class RoundingFloat(float):
 def round_floats(obj, precision=3):
     """
     Recursively round all floats in a nested structure to specified precision.
-    
+
     Args:
         obj: Object to process (dict, list, float, etc.)
         precision: Number of decimal places to keep
-    
+
     Returns:
         Object with all floats rounded
     """
@@ -114,7 +114,7 @@ def get_delta_precision() -> int:
     """
     Calculate the number of decimal places to use for rounding based on DELTA.
     This prevents floating point errors like 14.999999999999964 instead of 15.0
-    
+
     Returns the precision as number of decimal places.
     For DELTA=0.25, returns 2 (round to 0.01)
     For DELTA=0.10, returns 1 (round to 0.1)
@@ -126,7 +126,7 @@ def get_delta_precision() -> int:
         decimal_places = len(delta_str.split('.')[1])
     else:
         decimal_places = 0
-    
+
     # Return the number of decimal places for rounding
     return decimal_places
 
@@ -134,11 +134,11 @@ def get_delta_precision() -> int:
 def round_coordinate(value: float, precision: int) -> float:
     """
     Round a coordinate to the specified precision.
-    
+
     Args:
         value: Coordinate value to round
         precision: Number of decimal places
-    
+
     Returns:
         Rounded value
     """
@@ -179,35 +179,35 @@ def wgs84_to_mercator(lon: float, lat: float) -> Tuple[float, float]:
 def get_feature_bbox_fast(coordinates) -> Tuple[float, float, float, float]:
     """
     Fast bounding box calculation using iterative approach with stack.
-    
+
     Args:
         coordinates: GeoJSON coordinates array
-    
+
     Returns:
         Tuple of (min_x, min_y, max_x, max_y) or None if no valid coordinates
     """
     if not coordinates:
         return None
-    
+
     min_x = float('inf')
     min_y = float('inf')
     max_x = float('-inf')
     max_y = float('-inf')
     found = False
-    
+
     # Use a stack to avoid deep recursion
     stack = [coordinates]
-    
+
     while stack:
         coords = stack.pop()
-        
+
         if not coords:
             continue
-        
+
         # Skip if not a list or tuple
         if not isinstance(coords, (list, tuple)):
             continue
-        
+
         # Check if we have at least 2 elements
         if len(coords) < 2:
             # Add to stack if it's a container
@@ -215,17 +215,17 @@ def get_feature_bbox_fast(coordinates) -> Tuple[float, float, float, float]:
                 if isinstance(item, (list, tuple)):
                     stack.append(item)
             continue
-        
+
         first = coords[0]
         second = coords[1]
-        
+
         # Try to parse as a coordinate pair [x, y]
         # Check if both elements are numbers (not lists)
         if not isinstance(first, (list, tuple)) and not isinstance(second, (list, tuple)):
             try:
                 x = float(first)
                 y = float(second)
-                
+
                 # Validate these are reasonable coordinate values (in meters for Web Mercator)
                 if -20037509 <= x <= 20037509 and -20037509 <= y <= 20037509:
                     # This is a valid coordinate pair
@@ -237,12 +237,12 @@ def get_feature_bbox_fast(coordinates) -> Tuple[float, float, float, float]:
                     continue
             except (ValueError, TypeError):
                 pass
-        
+
         # If not a coordinate pair, add nested items to stack
         for item in coords:
             if isinstance(item, (list, tuple)):
                 stack.append(item)
-    
+
     if found:
         return (min_x, min_y, max_x, max_y)
     return None
@@ -252,46 +252,46 @@ def get_bbox_center(coordinates) -> Tuple[float, float]:
     """
     Get the center of the bounding box of GeoJSON coordinates.
     This is the arithmetic mean: (mean(min_x, max_x), mean(min_y, max_y))
-    
+
     Args:
         coordinates: GeoJSON coordinates array
-    
+
     Returns:
         Tuple of (x, y) representing bbox center, or None if no valid coordinates
     """
     if not coordinates:
         return None
-    
+
     min_x = float('inf')
     min_y = float('inf')
     max_x = float('-inf')
     max_y = float('-inf')
     found = False
-    
+
     # Use a stack to avoid deep recursion
     stack = [coordinates]
-    
+
     while stack:
         coords = stack.pop()
-        
+
         if not coords or not isinstance(coords, (list, tuple)):
             continue
-        
+
         if len(coords) < 2:
             for item in coords:
                 if isinstance(item, (list, tuple)):
                     stack.append(item)
             continue
-        
+
         first = coords[0]
         second = coords[1]
-        
+
         # Check if this is a coordinate pair [x, y]
         if not isinstance(first, (list, tuple)) and not isinstance(second, (list, tuple)):
             try:
                 x = float(first)
                 y = float(second)
-                
+
                 # Validate Web Mercator range
                 if -20037509 <= x <= 20037509 and -20037509 <= y <= 20037509:
                     if min_x > x: min_x = x
@@ -302,36 +302,36 @@ def get_bbox_center(coordinates) -> Tuple[float, float]:
                     continue
             except (ValueError, TypeError):
                 pass
-        
+
         # Not a coordinate pair, recurse
         for item in coords:
             if isinstance(item, (list, tuple)):
                 stack.append(item)
-    
+
     if found:
         # Return center of bounding box
         center_x = (min_x + max_x) / 2.0
         center_y = (min_y + max_y) / 2.0
         return (center_x, center_y)
-    
+
     return None
 
 
-def point_in_tile_bbox(point: Tuple[float, float], 
+def point_in_tile_bbox(point: Tuple[float, float],
                        tile_bbox_merc: Tuple[float, float, float, float]) -> bool:
     """
     Check if a point is inside a tile bounding box.
-    
+
     Args:
         point: (x, y) in Mercator coordinates
         tile_bbox_merc: Tile bounding box (min_x, min_y, max_x, max_y) in Mercator
-    
+
     Returns:
         True if point is inside tile
     """
     x, y = point
     min_x, min_y, max_x, max_y = tile_bbox_merc
-    
+
     return min_x <= x < max_x and min_y <= y < max_y
 
 def get_coordinate_string(value: float, is_longitude: bool) -> str:
@@ -348,7 +348,7 @@ def get_coordinate_string(value: float, is_longitude: bool) -> str:
     # Round to DELTA precision to avoid floating point errors
     precision = get_delta_precision()
     value = round_coordinate(value, precision)
-    
+
     if is_longitude:
         direction = 'e' if value >= 0 else 'w'
         digits = 5  # For output tiles
@@ -462,10 +462,10 @@ def download_input_tile(filename: str, temp_dir: Path, file_num: int, total_file
     output_path = temp_dir / filename
 
     if output_path.exists():
-        print(f"  File already exists: {filename} (file {file_num} of {total_files})")
+        logger.warning(f"  File already exists: {filename} (file {file_num} of {total_files})")
         return True
 
-    print(f"  Downloading {filename} (file {file_num} of {total_files})...")
+    logger.info(f"  Downloading {filename} (file {file_num} of {total_files})...")
 
     # Construct rsync URL without password in URL (use environment variable instead)
     rsync_url = f"rsync://m1782307@dataserv.ub.tum.de/m1782307/LoD1/europe/{filename}"
@@ -485,20 +485,20 @@ def download_input_tile(filename: str, temp_dir: Path, file_num: int, total_file
         )
 
         if result.returncode == 0:
-            print(f"  ✓ Downloaded {filename}")
+            logger.info(f"  ✓ Downloaded {filename}")
             return True
         else:
-            print(f"  ✗ Failed to download {filename}")
+            logger.error(f"  ✗ Failed to download {filename}")
             return False
 
     except subprocess.TimeoutExpired:
-        print(f"  ✗ Timeout downloading {filename}")
+        logger.error(f"  ✗ Timeout downloading {filename}")
         return False
     except FileNotFoundError:
-        print(f"  ✗ rsync command not found. Please install rsync.")
+        logger.critical(f"  ✗ rsync command not found. Please install rsync.")
         sys.exit(1)
     except Exception as e:
-        print(f"  ✗ Error downloading {filename}: {e}")
+        logger.error(f"  ✗ Error downloading {filename}: {e}")
         return False
 
 
@@ -510,7 +510,7 @@ def get_output_tiles() -> List[Tuple[float, float, float, float]]:
         List of (left_lon, upper_lat, right_lon, lower_lat) tuples
     """
     tiles = []
-    
+
     # Get rounding precision based on DELTA
     precision = get_delta_precision()
 
@@ -581,7 +581,7 @@ def feature_intersects_tile(feature: dict, tile_bbox_merc: Tuple[float, float, f
     feature_bbox = get_feature_bbox_fast(coordinates)
     if not feature_bbox:
         return False
-    
+
     # Fast bounding box intersection test
     return bbox_intersects_tile(feature_bbox, tile_bbox_merc)
 
@@ -615,7 +615,7 @@ def append_features_to_file(output_path: Path, features: List[dict], tile_bbox_m
             },
             "features": features_rounded
         }
-        
+
         # Add bbox if provided (in Mercator coordinates)
         if tile_bbox_merc:
             min_x, min_y, max_x, max_y = tile_bbox_merc
@@ -625,7 +625,7 @@ def append_features_to_file(output_path: Path, features: List[dict], tile_bbox_m
                 round(max_x, 3),
                 round(max_y, 3)
             ]
-        
+
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
     else:
@@ -707,7 +707,7 @@ def estimate_feature_count(input_file: Path) -> int:
         return max(estimated_features, 15)  # At least 15 since we read that many
 
     except Exception as e:
-        print(f"  ! Warning: Could not estimate feature count: {e}")
+        logger.warning(f"  ! Warning: Could not estimate feature count: {e}")
         return 0
 
 
@@ -722,58 +722,58 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
         output_dir: Directory to save output tiles
         tiles_written: Dictionary tracking feature counts per tile
     """
-    print(f"\n  Processing {input_file.name}...")
+    logger.info(f"\n  Processing {input_file.name}...")
 
     # Estimate feature count for progress reporting
     estimated_count = estimate_feature_count(input_file)
     if estimated_count > 0:
-        print(f"  Estimated features: ~{estimated_count:,}")
+        logger.info(f"  Estimated features: ~{estimated_count:,}")
 
     # Pre-convert tile bounds to Mercator bounding boxes for fast intersection tests
     # This is done once at startup instead of for every feature
     tile_bboxes_merc = {}
     tile_files = {}
-    
-    print(f"  Converting {len(output_tiles)} tiles to Mercator...")
-    
+
+    logger.info(f"  Converting {len(output_tiles)} tiles to Mercator...")
+
     # Build spatial index: grid cells that point to tiles
     # This avoids checking all 10k tiles for each feature
     grid_size = 100000.0  # 100km grid cells in Mercator
     spatial_index = {}  # (grid_x, grid_y) -> list of tile_bounds
-    
+
     for idx, bounds in enumerate(output_tiles):
         left_lon, upper_lat, right_lon, lower_lat = bounds
-        
+
         # Convert WGS84 tile corners to Mercator
         min_x, max_y = wgs84_to_mercator(left_lon, upper_lat)
         max_x, min_y = wgs84_to_mercator(right_lon, lower_lat)
-        
+
         # Store Mercator bounding box (min_x, min_y, max_x, max_y)
         tile_bbox_merc = (min_x, min_y, max_x, max_y)
         tile_bboxes_merc[bounds] = tile_bbox_merc
-        
+
         # Add to spatial index - find which grid cells this tile overlaps
         grid_x_min = int(min_x / grid_size)
         grid_x_max = int(max_x / grid_size)
         grid_y_min = int(min_y / grid_size)
         grid_y_max = int(max_y / grid_size)
-        
+
         for gx in range(grid_x_min, grid_x_max + 1):
             for gy in range(grid_y_min, grid_y_max + 1):
                 key = (gx, gy)
                 if key not in spatial_index:
                     spatial_index[key] = []
                 spatial_index[key].append(bounds)
-        
+
         # Debug: Print first few tiles
         if idx < 3:
-            print(f"    Tile {idx}: WGS84 ({left_lon:.1f}, {lower_lat:.1f}, {right_lon:.1f}, {upper_lat:.1f}) -> Mercator ({min_x:.0f}, {min_y:.0f}, {max_x:.0f}, {max_y:.0f})")
-        
+            logger.debug(f"    Tile {idx}: WGS84 ({left_lon:.1f}, {lower_lat:.1f}, {right_lon:.1f}, {upper_lat:.1f}) -> Mercator ({min_x:.0f}, {min_y:.0f}, {max_x:.0f}, {max_y:.0f})")
+
         # Store file path
         filename = get_output_tile_name(left_lon, upper_lat, right_lon, lower_lat)
         tile_files[bounds] = output_dir / filename
-    
-    print(f"  Built spatial index with {len(spatial_index)} grid cells")
+
+    logger.info(f"  Built spatial index with {len(spatial_index)} grid cells")
 
     # Temporary storage for batched writes
     batch_buffers = {bounds: [] for bounds in output_tiles}
@@ -781,7 +781,7 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
     features_with_coords = 0
     features_with_valid_bbox = 0
 
-    print(f"  Streaming features from file...")
+    logger.info(f"  Streaming features from file...")
 
     # Ensure BATCH_SIZE is at least 1
     batch_size = max(1, BATCH_SIZE)
@@ -804,34 +804,34 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
                 coordinates = geometry.get('coordinates', [])
                 if not coordinates:
                     continue
-                
+
                 features_with_coords += 1
-                
+
                 bbox_center = get_bbox_center(coordinates)
                 if not bbox_center:
                     if features_processed <= 3:
-                        print(f"    Feature {features_processed}: INVALID BBOX CENTER")
+                        logger.error(f"    Feature {features_processed}: INVALID BBOX CENTER")
                     continue
 
                 features_with_valid_bbox += 1
-                
+
                 center_x, center_y = bbox_center
-                
+
                 # Debug: Print first few features
                 if features_processed <= 3:
-                    print(f"    Feature {features_processed}: bbox center=({center_x:.0f}, {center_y:.0f})")
-                    print(f"      Geometry type: {geometry.get('type')}")
+                    logger.debug(f"    Feature {features_processed}: bbox center=({center_x:.0f}, {center_y:.0f})")
+                    logger.debug(f"      Geometry type: {geometry.get('type')}")
 
                 # Use spatial index to find candidate tiles (single grid cell for point)
                 grid_x = int(center_x / grid_size)
                 grid_y = int(center_y / grid_size)
-                
+
                 key = (grid_x, grid_y)
                 candidate_tiles = spatial_index.get(key, [])
-                
+
                 # Debug: Print candidate count for first few features
                 if features_processed <= 3:
-                    print(f"      Found {len(candidate_tiles)} candidate tiles")
+                    logger.debug(f"      Found {len(candidate_tiles)} candidate tiles")
 
                 # Find THE tile this feature belongs to (should be exactly one)
                 matched_tile = None
@@ -840,15 +840,15 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
                     if point_in_tile_bbox(bbox_center, tile_bbox_merc):
                         matched_tile = tile_bounds
                         break  # Found it, stop searching
-                
+
                 if matched_tile:
                     batch_buffers[matched_tile].append(feature)
-                    
+
                     # Debug: Print match for first few features
                     if features_processed <= 3:
-                        print(f"      Matched tile: {matched_tile}")
+                        logger.debug(f"      Matched tile: {matched_tile}")
                 elif features_processed <= 3:
-                    print(f"      WARNING: No matching tile found!")
+                    logger.warning(f"      WARNING: No matching tile found!")
 
                 # Flush batches when they get large enough
                 for tile_bounds in list(batch_buffers.keys()):
@@ -864,27 +864,27 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
                         batch_buffers[tile_bounds] = []
 
         if not HAS_TQDM:
-            print(f"  Processed: {features_processed:,} features (complete)")
+            logger.info(f"  Processed: {features_processed:,} features (complete)")
 
-        print(f"  Statistics:")
-        print(f"    Total features processed: {features_processed:,}")
-        print(f"    Features with coordinates: {features_with_coords:,}")
-        print(f"    Features with valid bbox: {features_with_valid_bbox:,}")
+        logger.info(f"  Statistics:")
+        logger.info(f"    Total features processed: {features_processed:,}")
+        logger.info(f"    Features with coordinates: {features_with_coords:,}")
+        logger.info(f"    Features with valid bbox: {features_with_valid_bbox:,}")
 
         if estimated_count > 0:
             accuracy = (features_processed / estimated_count) * 100
-            print(f"  Estimation accuracy: {accuracy:.1f}% (estimated {estimated_count:,}, actual {features_processed:,})")
+            logger.info(f"  Estimation accuracy: {accuracy:.1f}% (estimated {estimated_count:,}, actual {features_processed:,})")
 
         # Flush remaining batches
-        print(f"  Writing remaining features...")
+        logger.info(f"  Writing remaining features...")
         total_features_in_batches = sum(len(batch) for batch in batch_buffers.values())
-        print(f"  Total features in batches before flush: {total_features_in_batches}")
-        
+        logger.info(f"  Total features in batches before flush: {total_features_in_batches}")
+
         for tile_bounds, batch in batch_buffers.items():
             if batch:
                 output_path = tile_files[tile_bounds]
                 tile_bbox_merc = tile_bboxes_merc[tile_bounds]
-                print(f"    Flushing {len(batch)} features to {output_path.name}")
+                logger.debug(f"    Flushing {len(batch)} features to {output_path.name}")
                 append_features_to_file(output_path, batch, tile_bbox_merc)
                 # Update counter
                 filename = output_path.name
@@ -893,12 +893,12 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
         # Free memory
         del batch_buffers
 
-        print(f"  ✓ Completed processing {input_file.name}")
+        logger.debug(f"  ✓ Completed processing {input_file.name}")
 
     except Exception as e:
-        print(f"  ✗ Error processing {input_file.name}: {e}")
+        logger.debug(f"  ✗ Error processing {input_file.name}: {e}")
         import traceback
-        traceback.print_exc()
+        traceback.logger.debug_exc()
 
 
 def download_country_boundary(urls: List[str], cache_file: Path) -> Optional[Dict]:
@@ -907,9 +907,9 @@ def download_country_boundary(urls: List[str], cache_file: Path) -> Optional[Dic
         logger.debug(f"Using cached country data: {cache_file}")
         with open(cache_file, 'r', encoding='utf-8') as f:
             return json.load(f)
-    
+
     logger.info("Downloading country boundary data...")
-    
+
     for url in urls:
         logger.debug(f"Trying URL: {url}")
         try:
@@ -923,7 +923,7 @@ def download_country_boundary(urls: List[str], cache_file: Path) -> Optional[Dic
     else:
         logger.error("All download sources failed")
         return None
-    
+
     logger.debug("Extracting shapefile...")
     try:
         with zipfile.ZipFile(io.BytesIO(response.content)) as z:
@@ -931,64 +931,64 @@ def download_country_boundary(urls: List[str], cache_file: Path) -> Optional[Dic
             if not shp_files:
                 logger.error("No .shp file found in ZIP")
                 return None
-            
+
             shp_name = shp_files[0]
             base_name = shp_name.replace('.shp', '')
-            
+
             temp_dir = Path(CACHE_DIR) / "temp"
             temp_dir.mkdir(parents=True, exist_ok=True)
-            
+
             for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg']:
                 filename = base_name + ext
                 if filename in z.namelist():
                     z.extract(filename, temp_dir)
-            
+
             shp_path = temp_dir / shp_name
-            
+
             logger.debug("Converting to GeoJSON using OGR...")
             driver = ogr.GetDriverByName('ESRI Shapefile')
             datasource = driver.Open(str(shp_path), 0)
-            
+
             if datasource is None:
                 logger.error(f"Could not open shapefile: {shp_path}")
                 return None
-            
+
             layer = datasource.GetLayer()
             features = []
-            
+
             for feature in layer:
                 geom = feature.GetGeometryRef()
                 if geom:
                     geom_json = json.loads(geom.ExportToJson())
                 else:
                     geom_json = None
-                
+
                 attributes = {}
                 for i in range(feature.GetFieldCount()):
                     field_name = feature.GetFieldDefnRef(i).GetName()
                     field_value = feature.GetField(i)
                     attributes[field_name] = field_value
-                
+
                 features.append({
                     "type": "Feature",
                     "geometry": geom_json,
                     "properties": attributes
                 })
-            
+
             datasource = None
-            
+
             geojson = {
                 "type": "FeatureCollection",
                 "features": features
             }
-            
+
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             with open(cache_file, 'w', encoding='utf-8') as f:
                 json.dump(geojson, f)
-            
+
             logger.debug(f"Cached to: {cache_file}")
             return geojson
-            
+
     except Exception as e:
         logger.error(f"Error extracting: {e}")
         return None
@@ -997,7 +997,7 @@ def download_country_boundary(urls: List[str], cache_file: Path) -> Optional[Dic
 def load_country_bbox(country_name: str) -> Optional[Tuple[float, float, float, float]]:
     """
     Load country bounding box from Natural Earth data.
-    
+
     Returns:
         Tuple of (min_lon, min_lat, max_lon, max_lat) or None if not found
     """
@@ -1005,13 +1005,13 @@ def load_country_bbox(country_name: str) -> Optional[Tuple[float, float, float, 
         logger.error("Country boundaries require 'requests' and 'gdal' (osgeo) modules")
         logger.error("Install with: pip install requests gdal")
         return None
-    
+
     cache_file = Path(CACHE_DIR) / "countries_110m.geojson"
-    
+
     geojson = download_country_boundary(SIMPLIFIED_COUNTRY_URLS, cache_file)
     if not geojson:
         return None
-    
+
     for feature in geojson.get('features', []):
         properties = feature.get('properties', {})
         names = [
@@ -1020,19 +1020,19 @@ def load_country_bbox(country_name: str) -> Optional[Tuple[float, float, float, 
             properties.get('ADMIN', ''),
             properties.get('NAME_EN', '')
         ]
-        
+
         if any(country_name.lower() in name.lower() for name in names):
             logger.info(f"Found country: {properties.get('NAME', 'Unknown')}")
-            
+
             geom_json = json.dumps(feature['geometry'])
             geom = ogr.CreateGeometryFromJson(geom_json)
-            
+
             envelope = geom.GetEnvelope()
             # OGR envelope is (minX, maxX, minY, maxY)
             bbox = (envelope[0], envelope[2], envelope[1], envelope[3])
             logger.info(f"Country bbox: {bbox[0]:.3f}, {bbox[1]:.3f}, {bbox[2]:.3f}, {bbox[3]:.3f}")
             return bbox
-    
+
     logger.error(f"Country '{country_name}' not found")
     return None
 
@@ -1057,7 +1057,7 @@ Examples:
   %(prog)s --bbox 10.0 50.0 11.0 51.0 --debug
         '''
     )
-    
+
     # Area specification (mutually exclusive)
     area_group = parser.add_mutually_exclusive_group(required=True)
     area_group.add_argument(
@@ -1073,7 +1073,7 @@ Examples:
         metavar='NAME',
         help='Country name (e.g., "Germany", "France")'
     )
-    
+
     # Logging (mutually exclusive)
     log_group = parser.add_mutually_exclusive_group()
     log_group.add_argument(
@@ -1086,7 +1086,7 @@ Examples:
         action='store_true',
         help='Enable debug output (DEBUG level)'
     )
-    
+
     # Optional parameters
     parser.add_argument(
         '--delta',
@@ -1116,7 +1116,7 @@ Examples:
         metavar='DIR',
         help='Temporary directory (default: GBA_temp)'
     )
-    
+
     return parser.parse_args()
 
 
@@ -1128,7 +1128,7 @@ def setup_logging(verbose: bool = False, debug: bool = False):
         level = logging.INFO
     else:
         level = logging.WARNING
-    
+
     logging.basicConfig(
         level=level,
         format='%(levelname)s: %(message)s'
@@ -1139,15 +1139,15 @@ def main():
     """Main execution function."""
     args = parse_args()
     setup_logging(args.verbose, args.debug)
-    
+
     # Set global configuration from arguments
     global DELTA, BATCH_SIZE, OUTPUT_DIR, TEMP_DIR, LON_MIN, LAT_MIN, LON_MAX, LAT_MAX
-    
+
     DELTA = args.delta
     BATCH_SIZE = args.batch_size
     OUTPUT_DIR = args.output_dir
     TEMP_DIR = args.temp_dir
-    
+
     # Determine area of interest
     if args.bbox:
         LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = args.bbox
@@ -1155,15 +1155,15 @@ def main():
     elif args.country:
         bbox = load_country_bbox(args.country)
         if bbox is None:
-            logger.error(f"Could not load boundaries for country: {args.country}")
+            logger.critical(f"Could not load boundaries for country: {args.country}")
             sys.exit(1)
         LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = bbox
         logger.info(f"Using country '{args.country}' bbox: {LON_MIN}°E to {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
-    
+
     logger.info(f"Tile size: {DELTA}°")
     logger.info(f"Batch size: {max(1, BATCH_SIZE)} features")
     logger.info(f"Output directory: {OUTPUT_DIR}")
-    
+
     # Create directories
     temp_dir = Path(TEMP_DIR)
     output_dir = Path(OUTPUT_DIR)
@@ -1190,7 +1190,7 @@ def main():
             downloaded_files.append(temp_dir / filename)
 
     if not downloaded_files:
-        logger.error("No files were downloaded successfully.")
+        logger.critical("No files were downloaded successfully.")
         sys.exit(1)
 
     # Process and split tiles
@@ -1223,4 +1223,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
