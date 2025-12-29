@@ -1062,9 +1062,7 @@ def download_country_boundary(urls: List[str], cache_file: Path
         return None
 
 
-def load_country_bbox(country_name: str
-                      ) -> Optional[Tuple[Tuple[float, float, float, float],
-                                          Optional]]:
+def load_country_bbox(country_name: str):
     """
     Load country bounding box and geometry from Natural Earth data.
 
