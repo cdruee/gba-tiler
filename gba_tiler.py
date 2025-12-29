@@ -6,6 +6,10 @@ Downloads GeoJSON files from GlobalBuildingAtlas via rsync and splits them
 into smaller tiles with configurable resolution.
 
 Streaming version: Uses ijson for memory-efficient JSON parsing.
+
+Note: Input files use EPSG:3857 (Web Mercator) coordinate system with coordinates
+in meters. Output tiles are defined in WGS84 (EPSG:4326) lat/lon degrees.
+The script automatically converts between coordinate systems.
 """
 
 import os
@@ -32,6 +36,11 @@ except ImportError:
     HAS_TQDM = False
     print("Warning: tqdm not found, progress bars will be disabled")
 
+# Earth radius for Web Mercator projection
+EARTH_RADIUS = 6378137.0  # meters
+
+
+
 # Configuration constants
 DELTA = 0.25  # Tile size in degrees
 LAT_MIN = 45.0  # Minimum latitude of interest
@@ -47,6 +56,38 @@ TEMP_DIR = "GBA_temp"
 # Memory optimization: batch size for writing features
 BATCH_SIZE = 100  # Minimum 1, recommended 50-1000
 
+# ----------------------------------------------------------------------------
+
+def mercator_to_wgs84(x: float, y: float) -> Tuple[float, float]:
+    """
+    Convert EPSG:3857 (Web Mercator) coordinates to WGS84 (lat/lon).
+
+    Args:
+        x: Easting in meters
+        y: Northing in meters
+
+    Returns:
+        Tuple of (longitude, latitude) in degrees
+    """
+    lon = (x / EARTH_RADIUS) * (180.0 / math.pi)
+    lat = (2.0 * math.atan(math.exp(y / EARTH_RADIUS)) - math.pi / 2.0) * (180.0 / math.pi)
+    return lon, lat
+
+
+def wgs84_to_mercator(lon: float, lat: float) -> Tuple[float, float]:
+    """
+    Convert WGS84 (lat/lon) coordinates to EPSG:3857 (Web Mercator).
+
+    Args:
+        lon: Longitude in degrees
+        lat: Latitude in degrees
+
+    Returns:
+        Tuple of (x, y) in meters
+    """
+    x = EARTH_RADIUS * lon * (math.pi / 180.0)
+    y = EARTH_RADIUS * math.log(math.tan(math.pi / 4.0 + lat * (math.pi / 180.0) / 2.0))
+    return x, y
 
 def get_coordinate_string(value: float, is_longitude: bool) -> str:
     """
@@ -62,12 +103,12 @@ def get_coordinate_string(value: float, is_longitude: bool) -> str:
     if is_longitude:
         direction = 'e' if value >= 0 else 'w'
         digits = 5  # For output tiles
-        abs_val = abs(int(value))
+        abs_val = abs(int(value*100))
         return f"{direction}{abs_val:0{digits}d}"
     else:
         direction = 'n' if value >= 0 else 's'
         digits = 4  # For output tiles
-        abs_val = abs(int(value))
+        abs_val = abs(int(value*100))
         return f"{direction}{abs_val:0{digits}d}"
 
 
@@ -245,29 +286,32 @@ def get_output_tiles() -> List[Tuple[float, float, float, float]]:
     return tiles
 
 
-def point_in_tile(lon: float, lat: float, tile_bounds: Tuple[float, float, float, float]) -> bool:
+def point_in_tile(x: float, y: float, tile_bounds: Tuple[float, float, float, float]) -> bool:
     """
-    Check if a point is within a tile's bounds.
+    Check if a point (in EPSG:3857 Web Mercator) is within a tile's bounds (in WGS84).
 
     Args:
-        lon: Longitude of point
-        lat: Latitude of point
-        tile_bounds: (left_lon, upper_lat, right_lon, lower_lat)
+        x: X coordinate in meters (EPSG:3857)
+        y: Y coordinate in meters (EPSG:3857)
+        tile_bounds: (left_lon, upper_lat, right_lon, lower_lat) in WGS84 degrees
 
     Returns:
         True if point is in tile
     """
+    # Convert from Web Mercator to WGS84
+    lon, lat = mercator_to_wgs84(x, y)
+
     left_lon, upper_lat, right_lon, lower_lat = tile_bounds
     return (left_lon <= lon < right_lon and lower_lat <= lat < upper_lat)
 
 
 def feature_intersects_tile(feature: dict, tile_bounds: Tuple[float, float, float, float]) -> bool:
     """
-    Check if a GeoJSON feature intersects with a tile.
+    Check if a GeoJSON feature (in EPSG:3857) intersects with a tile (in WGS84).
 
     Args:
-        feature: GeoJSON feature
-        tile_bounds: (left_lon, upper_lat, right_lon, lower_lat)
+        feature: GeoJSON feature with coordinates in EPSG:3857 (Web Mercator, meters)
+        tile_bounds: (left_lon, upper_lat, right_lon, lower_lat) in WGS84 degrees
 
     Returns:
         True if feature intersects tile
@@ -288,16 +332,16 @@ def feature_intersects_tile(feature: dict, tile_bounds: Tuple[float, float, floa
         if isinstance(coords, Decimal):
             return False
 
-        # Check if this is a coordinate pair [lon, lat]
+        # Check if this is a coordinate pair [x, y] in Web Mercator
         # Coordinates can be int, float, or Decimal (from ijson)
         if len(coords) >= 2:
             first = coords[0]
             # Check if first element is a number (not a list)
             if isinstance(first, (int, float, Decimal)):
-                # This is a coordinate pair
-                lon = float(coords[0])
-                lat = float(coords[1])
-                return point_in_tile(lon, lat, tile_bounds)
+                # This is a coordinate pair in Web Mercator (x, y in meters)
+                x = float(coords[0])
+                y = float(coords[1])
+                return point_in_tile(x, y, tile_bounds)
 
         # Otherwise, recurse into nested lists
         try:
