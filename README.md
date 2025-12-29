@@ -501,6 +501,8 @@ Contributions are welcome! Please:
 
 ## License
 
+Copyright (C) 2025 Clemens Drüe, Universität Trier
+
 This project is licensed under the 
 [European Union Public License v1.2 (EUPL-1.2)](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
 

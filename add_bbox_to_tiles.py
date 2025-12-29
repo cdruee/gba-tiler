@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: EUPL-1.2
+# Copyright (C) 2025 Clemens Drüe, Universität Trier
 """
 Add Bounding Box to Existing GeoJSON Tiles
 
