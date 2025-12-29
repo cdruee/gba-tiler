@@ -17,8 +17,12 @@ import sys
 import subprocess
 import json
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import math
+import argparse
+import logging
+import zipfile
+import io
 
 try:
     import ijson
@@ -34,10 +38,30 @@ try:
     HAS_TQDM = True
 except ImportError:
     HAS_TQDM = False
-    print("Warning: tqdm not found, progress bars will be disabled")
+
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
+try:
+    from osgeo import ogr
+    HAS_OGR = True
+except ImportError:
+    HAS_OGR = False
 
 # Earth radius for Web Mercator projection
 EARTH_RADIUS = 6378137.0  # meters
+
+# Natural Earth Data URLs for country boundaries
+CACHE_DIR = ".country_borders_cache"
+SIMPLIFIED_COUNTRY_URLS = [
+    "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip",
+]
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 
 class RoundingFloat(float):
@@ -877,16 +901,269 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
         traceback.print_exc()
 
 
+def download_country_boundary(urls: List[str], cache_file: Path) -> Optional[Dict]:
+    """Download and cache country boundary data."""
+    if cache_file.exists():
+        logger.debug(f"Using cached country data: {cache_file}")
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    
+    logger.info("Downloading country boundary data...")
+    
+    for url in urls:
+        logger.debug(f"Trying URL: {url}")
+        try:
+            response = requests.get(url, timeout=60)
+            response.raise_for_status()
+            logger.debug("Download successful")
+            break
+        except Exception as e:
+            logger.debug(f"Failed: {e}")
+            continue
+    else:
+        logger.error("All download sources failed")
+        return None
+    
+    logger.debug("Extracting shapefile...")
+    try:
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            shp_files = [f for f in z.namelist() if f.endswith('.shp')]
+            if not shp_files:
+                logger.error("No .shp file found in ZIP")
+                return None
+            
+            shp_name = shp_files[0]
+            base_name = shp_name.replace('.shp', '')
+            
+            temp_dir = Path(CACHE_DIR) / "temp"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg']:
+                filename = base_name + ext
+                if filename in z.namelist():
+                    z.extract(filename, temp_dir)
+            
+            shp_path = temp_dir / shp_name
+            
+            logger.debug("Converting to GeoJSON using OGR...")
+            driver = ogr.GetDriverByName('ESRI Shapefile')
+            datasource = driver.Open(str(shp_path), 0)
+            
+            if datasource is None:
+                logger.error(f"Could not open shapefile: {shp_path}")
+                return None
+            
+            layer = datasource.GetLayer()
+            features = []
+            
+            for feature in layer:
+                geom = feature.GetGeometryRef()
+                if geom:
+                    geom_json = json.loads(geom.ExportToJson())
+                else:
+                    geom_json = None
+                
+                attributes = {}
+                for i in range(feature.GetFieldCount()):
+                    field_name = feature.GetFieldDefnRef(i).GetName()
+                    field_value = feature.GetField(i)
+                    attributes[field_name] = field_value
+                
+                features.append({
+                    "type": "Feature",
+                    "geometry": geom_json,
+                    "properties": attributes
+                })
+            
+            datasource = None
+            
+            geojson = {
+                "type": "FeatureCollection",
+                "features": features
+            }
+            
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(geojson, f)
+            
+            logger.debug(f"Cached to: {cache_file}")
+            return geojson
+            
+    except Exception as e:
+        logger.error(f"Error extracting: {e}")
+        return None
+
+
+def load_country_bbox(country_name: str) -> Optional[Tuple[float, float, float, float]]:
+    """
+    Load country bounding box from Natural Earth data.
+    
+    Returns:
+        Tuple of (min_lon, min_lat, max_lon, max_lat) or None if not found
+    """
+    if not HAS_REQUESTS or not HAS_OGR:
+        logger.error("Country boundaries require 'requests' and 'gdal' (osgeo) modules")
+        logger.error("Install with: pip install requests gdal")
+        return None
+    
+    cache_file = Path(CACHE_DIR) / "countries_110m.geojson"
+    
+    geojson = download_country_boundary(SIMPLIFIED_COUNTRY_URLS, cache_file)
+    if not geojson:
+        return None
+    
+    for feature in geojson.get('features', []):
+        properties = feature.get('properties', {})
+        names = [
+            properties.get('NAME', ''),
+            properties.get('NAME_LONG', ''),
+            properties.get('ADMIN', ''),
+            properties.get('NAME_EN', '')
+        ]
+        
+        if any(country_name.lower() in name.lower() for name in names):
+            logger.info(f"Found country: {properties.get('NAME', 'Unknown')}")
+            
+            geom_json = json.dumps(feature['geometry'])
+            geom = ogr.CreateGeometryFromJson(geom_json)
+            
+            envelope = geom.GetEnvelope()
+            # OGR envelope is (minX, maxX, minY, maxY)
+            bbox = (envelope[0], envelope[2], envelope[1], envelope[3])
+            logger.info(f"Country bbox: {bbox[0]:.3f}, {bbox[1]:.3f}, {bbox[2]:.3f}, {bbox[3]:.3f}")
+            return bbox
+    
+    logger.error(f"Country '{country_name}' not found")
+    return None
+
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description='GlobalBuildingAtlas Downloader and Tiler',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  # Use bounding box
+  %(prog)s --bbox 5.0 45.0 15.0 55.0
+
+  # Use country boundary
+  %(prog)s --country Germany
+
+  # With verbose output
+  %(prog)s --country France --verbose
+
+  # With debug output
+  %(prog)s --bbox 10.0 50.0 11.0 51.0 --debug
+        '''
+    )
+    
+    # Area specification (mutually exclusive)
+    area_group = parser.add_mutually_exclusive_group(required=True)
+    area_group.add_argument(
+        '--bbox',
+        nargs=4,
+        metavar=('LON_MIN', 'LAT_MIN', 'LON_MAX', 'LAT_MAX'),
+        type=float,
+        help='Bounding box: min_lon min_lat max_lon max_lat (in degrees)'
+    )
+    area_group.add_argument(
+        '--country',
+        type=str,
+        metavar='NAME',
+        help='Country name (e.g., "Germany", "France")'
+    )
+    
+    # Logging (mutually exclusive)
+    log_group = parser.add_mutually_exclusive_group()
+    log_group.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose output (INFO level)'
+    )
+    log_group.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug output (DEBUG level)'
+    )
+    
+    # Optional parameters
+    parser.add_argument(
+        '--delta',
+        type=float,
+        default=0.10,
+        metavar='DEGREES',
+        help='Tile size in degrees (default: 0.10)'
+    )
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        default=1000,
+        metavar='N',
+        help='Batch size for writing features (default: 1000)'
+    )
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        default='GBA_tiles',
+        metavar='DIR',
+        help='Output directory (default: GBA_tiles)'
+    )
+    parser.add_argument(
+        '--temp-dir',
+        type=str,
+        default='GBA_temp',
+        metavar='DIR',
+        help='Temporary directory (default: GBA_temp)'
+    )
+    
+    return parser.parse_args()
+
+
+def setup_logging(verbose: bool = False, debug: bool = False):
+    """Setup logging configuration."""
+    if debug:
+        level = logging.DEBUG
+    elif verbose:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
+    
+    logging.basicConfig(
+        level=level,
+        format='%(levelname)s: %(message)s'
+    )
+
+
 def main():
     """Main execution function."""
-    print("GlobalBuildingAtlas Downloader and Tiler (Streaming)")
-    print("=" * 50)
-    print(f"Configuration:")
-    print(f"  Area: {LON_MIN}°E to {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
-    print(f"  Tile size: {DELTA}°")
-    print(f"  Batch size: {max(1, BATCH_SIZE)} features")
-    print()
-
+    args = parse_args()
+    setup_logging(args.verbose, args.debug)
+    
+    # Set global configuration from arguments
+    global DELTA, BATCH_SIZE, OUTPUT_DIR, TEMP_DIR, LON_MIN, LAT_MIN, LON_MAX, LAT_MAX
+    
+    DELTA = args.delta
+    BATCH_SIZE = args.batch_size
+    OUTPUT_DIR = args.output_dir
+    TEMP_DIR = args.temp_dir
+    
+    # Determine area of interest
+    if args.bbox:
+        LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = args.bbox
+        logger.info(f"Using bounding box: {LON_MIN}°E to {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
+    elif args.country:
+        bbox = load_country_bbox(args.country)
+        if bbox is None:
+            logger.error(f"Could not load boundaries for country: {args.country}")
+            sys.exit(1)
+        LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = bbox
+        logger.info(f"Using country '{args.country}' bbox: {LON_MIN}°E to {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
+    
+    logger.info(f"Tile size: {DELTA}°")
+    logger.info(f"Batch size: {max(1, BATCH_SIZE)} features")
+    logger.info(f"Output directory: {OUTPUT_DIR}")
+    
     # Create directories
     temp_dir = Path(TEMP_DIR)
     output_dir = Path(OUTPUT_DIR)
@@ -894,18 +1171,18 @@ def main():
     output_dir.mkdir(exist_ok=True)
 
     # Calculate which input tiles we need
-    print("Step 1: Determining required input tiles...")
+    logger.info("Step 1: Determining required input tiles...")
     input_tiles = get_input_tile_bounds(LON_MIN, LAT_MIN, LON_MAX, LAT_MAX)
-    print(f"  Need {len(input_tiles)} input tile(s)")
+    logger.info(f"Need {len(input_tiles)} input tile(s)")
 
     # Calculate output tile structure
-    print("\nStep 2: Calculating output tile grid...")
+    logger.info("Step 2: Calculating output tile grid...")
     output_tiles = get_output_tiles()
     total_output_tiles = len(output_tiles)
-    print(f"  Will create up to {total_output_tiles} output tile(s)")
+    logger.info(f"Will create up to {total_output_tiles} output tile(s)")
 
     # Download input tiles
-    print("\nStep 3: Downloading input tiles...")
+    logger.info("Step 3: Downloading input tiles...")
     downloaded_files = []
     for idx, (left_lon, upper_lat, right_lon, lower_lat) in enumerate(input_tiles, 1):
         filename = get_input_filename(left_lon, upper_lat, right_lon, lower_lat)
@@ -913,12 +1190,12 @@ def main():
             downloaded_files.append(temp_dir / filename)
 
     if not downloaded_files:
-        print("\n✗ No files were downloaded successfully.")
+        logger.error("No files were downloaded successfully.")
         sys.exit(1)
 
     # Process and split tiles
-    print(f"\nStep 4: Splitting tiles...")
-    print(f"Processing {len(downloaded_files)} input file(s) using streaming...")
+    logger.info("Step 4: Splitting tiles...")
+    logger.info(f"Processing {len(downloaded_files)} input file(s) using streaming...")
 
     tiles_written = {}  # Track feature counts per output tile
 
@@ -926,19 +1203,22 @@ def main():
         split_input_tile(input_file, output_tiles, output_dir, tiles_written)
 
     # Summary
-    print("\n" + "=" * 50)
-    print("Complete!")
+    logger.info("=" * 50)
+    logger.info("Complete!")
     output_files = list(output_dir.glob("*.geojson"))
-    print(f"Created {len(output_files)} output tile(s) in {OUTPUT_DIR}/")
+    logger.info(f"Created {len(output_files)} output tile(s) in {OUTPUT_DIR}/")
 
     # Show feature counts
     if tiles_written:
-        print(f"\nFeature counts per tile:")
-        for filename in sorted(tiles_written.keys()):
+        files_with_features = [(k, v) for k, v in tiles_written.items() if v > 0]
+        logger.info(f"Files with features: {len(files_with_features)}")
+        logger.debug("Feature counts per tile:")
+        for filename in sorted(tiles_written.keys())[:10]:
             count = tiles_written[filename]
-            print(f"  {filename}: {count} features")
+            if count > 0:
+                logger.debug(f"  {filename}: {count} features")
 
-    print(f"\nInput files stored in {TEMP_DIR}/")
+    logger.debug(f"Input files stored in {TEMP_DIR}/")
 
 
 if __name__ == "__main__":
