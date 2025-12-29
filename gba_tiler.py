@@ -151,6 +151,165 @@ def wgs84_to_mercator(lon: float, lat: float) -> Tuple[float, float]:
     y = EARTH_RADIUS * math.log(math.tan(math.pi / 4.0 + lat * (math.pi / 180.0) / 2.0))
     return x, y
 
+
+def get_feature_bbox_fast(coordinates) -> Tuple[float, float, float, float]:
+    """
+    Fast bounding box calculation using iterative approach with stack.
+    
+    Args:
+        coordinates: GeoJSON coordinates array
+    
+    Returns:
+        Tuple of (min_x, min_y, max_x, max_y) or None if no valid coordinates
+    """
+    if not coordinates:
+        return None
+    
+    min_x = float('inf')
+    min_y = float('inf')
+    max_x = float('-inf')
+    max_y = float('-inf')
+    found = False
+    
+    # Use a stack to avoid deep recursion
+    stack = [coordinates]
+    
+    while stack:
+        coords = stack.pop()
+        
+        if not coords:
+            continue
+        
+        # Skip if not a list or tuple
+        if not isinstance(coords, (list, tuple)):
+            continue
+        
+        # Check if we have at least 2 elements
+        if len(coords) < 2:
+            # Add to stack if it's a container
+            for item in coords:
+                if isinstance(item, (list, tuple)):
+                    stack.append(item)
+            continue
+        
+        first = coords[0]
+        second = coords[1]
+        
+        # Try to parse as a coordinate pair [x, y]
+        # Check if both elements are numbers (not lists)
+        if not isinstance(first, (list, tuple)) and not isinstance(second, (list, tuple)):
+            try:
+                x = float(first)
+                y = float(second)
+                
+                # Validate these are reasonable coordinate values (in meters for Web Mercator)
+                if -20037509 <= x <= 20037509 and -20037509 <= y <= 20037509:
+                    # This is a valid coordinate pair
+                    if min_x > x: min_x = x
+                    if max_x < x: max_x = x
+                    if min_y > y: min_y = y
+                    if max_y < y: max_y = y
+                    found = True
+                    continue
+            except (ValueError, TypeError):
+                pass
+        
+        # If not a coordinate pair, add nested items to stack
+        for item in coords:
+            if isinstance(item, (list, tuple)):
+                stack.append(item)
+    
+    if found:
+        return (min_x, min_y, max_x, max_y)
+    return None
+
+
+def get_bbox_center(coordinates) -> Tuple[float, float]:
+    """
+    Get the center of the bounding box of GeoJSON coordinates.
+    This is the arithmetic mean: (mean(min_x, max_x), mean(min_y, max_y))
+    
+    Args:
+        coordinates: GeoJSON coordinates array
+    
+    Returns:
+        Tuple of (x, y) representing bbox center, or None if no valid coordinates
+    """
+    if not coordinates:
+        return None
+    
+    min_x = float('inf')
+    min_y = float('inf')
+    max_x = float('-inf')
+    max_y = float('-inf')
+    found = False
+    
+    # Use a stack to avoid deep recursion
+    stack = [coordinates]
+    
+    while stack:
+        coords = stack.pop()
+        
+        if not coords or not isinstance(coords, (list, tuple)):
+            continue
+        
+        if len(coords) < 2:
+            for item in coords:
+                if isinstance(item, (list, tuple)):
+                    stack.append(item)
+            continue
+        
+        first = coords[0]
+        second = coords[1]
+        
+        # Check if this is a coordinate pair [x, y]
+        if not isinstance(first, (list, tuple)) and not isinstance(second, (list, tuple)):
+            try:
+                x = float(first)
+                y = float(second)
+                
+                # Validate Web Mercator range
+                if -20037509 <= x <= 20037509 and -20037509 <= y <= 20037509:
+                    if min_x > x: min_x = x
+                    if max_x < x: max_x = x
+                    if min_y > y: min_y = y
+                    if max_y < y: max_y = y
+                    found = True
+                    continue
+            except (ValueError, TypeError):
+                pass
+        
+        # Not a coordinate pair, recurse
+        for item in coords:
+            if isinstance(item, (list, tuple)):
+                stack.append(item)
+    
+    if found:
+        # Return center of bounding box
+        center_x = (min_x + max_x) / 2.0
+        center_y = (min_y + max_y) / 2.0
+        return (center_x, center_y)
+    
+    return None
+
+
+def point_in_tile_bbox(point: Tuple[float, float], 
+                       tile_bbox_merc: Tuple[float, float, float, float]) -> bool:
+    """
+    Check if a point is inside a tile bounding box.
+    
+    Args:
+        point: (x, y) in Mercator coordinates
+        tile_bbox_merc: Tile bounding box (min_x, min_y, max_x, max_y) in Mercator
+    
+    Returns:
+        True if point is inside tile
+    """
+    x, y = point
+    min_x, min_y, max_x, max_y = tile_bbox_merc
+    
+    return min_x <= x < max_x and min_y <= y < max_y
+
 def get_coordinate_string(value: float, is_longitude: bool) -> str:
     """
     Format coordinate as string following the naming convention.
@@ -376,13 +535,14 @@ def point_in_tile(x: float, y: float, tile_bounds: Tuple[float, float, float, fl
     return (left_lon <= lon < right_lon and lower_lat <= lat < upper_lat)
 
 
-def feature_intersects_tile(feature: dict, tile_bounds: Tuple[float, float, float, float]) -> bool:
+def feature_intersects_tile(feature: dict, tile_bbox_merc: Tuple[float, float, float, float]) -> bool:
     """
-    Check if a GeoJSON feature (in EPSG:3857) intersects with a tile (in WGS84).
+    Check if a GeoJSON feature (in EPSG:3857) intersects with a tile (in Mercator).
+    Uses bounding box intersection for speed.
 
     Args:
         feature: GeoJSON feature with coordinates in EPSG:3857 (Web Mercator, meters)
-        tile_bounds: (left_lon, upper_lat, right_lon, lower_lat) in WGS84 degrees
+        tile_bbox_merc: Tile bounding box (min_x, min_y, max_x, max_y) in Mercator
 
     Returns:
         True if feature intersects tile
@@ -393,37 +553,16 @@ def feature_intersects_tile(feature: dict, tile_bounds: Tuple[float, float, floa
     if not coordinates:
         return False
 
-    # For simplicity, check if any coordinate is within the tile
-    # This is a conservative approach - includes features that touch the tile
-    def check_coords(coords):
-        if not coords:
-            return False
-
-        # Handle Decimal objects from ijson
-        if isinstance(coords, Decimal):
-            return False
-
-        # Check if this is a coordinate pair [x, y] in Web Mercator
-        # Coordinates can be int, float, or Decimal (from ijson)
-        if len(coords) >= 2:
-            first = coords[0]
-            # Check if first element is a number (not a list)
-            if isinstance(first, (int, float, Decimal)):
-                # This is a coordinate pair in Web Mercator (x, y in meters)
-                x = float(coords[0])
-                y = float(coords[1])
-                return point_in_tile(x, y, tile_bounds)
-
-        # Otherwise, recurse into nested lists
-        try:
-            return any(check_coords(c) for c in coords)
-        except (TypeError, AttributeError):
-            return False
-
-    return check_coords(coordinates)
+    # Calculate feature bounding box
+    feature_bbox = get_feature_bbox_fast(coordinates)
+    if not feature_bbox:
+        return False
+    
+    # Fast bounding box intersection test
+    return bbox_intersects_tile(feature_bbox, tile_bbox_merc)
 
 
-def append_features_to_file(output_path: Path, features: List[dict]):
+def append_features_to_file(output_path: Path, features: List[dict], tile_bbox_merc: Tuple[float, float, float, float] = None):
     """
     Append features to a GeoJSON file with proper formatting.
     All float values are rounded to 3 decimal places (0.001 precision) to save disk space.
@@ -431,6 +570,7 @@ def append_features_to_file(output_path: Path, features: List[dict]):
     Args:
         output_path: Path to output file
         features: List of features to append
+        tile_bbox_merc: Optional tile bounding box (min_x, min_y, max_x, max_y) in Mercator
     """
     if not features:
         return
@@ -439,8 +579,7 @@ def append_features_to_file(output_path: Path, features: List[dict]):
     features_rounded = round_floats(features, precision=3)
 
     if not output_path.exists():
-        # Create new file with CRS and name metadata
-        # Name is the output filename stem
+        # Create new file with CRS, name, and bbox metadata
         data = {
             "type": "FeatureCollection",
             "name": output_path.stem,
@@ -452,6 +591,17 @@ def append_features_to_file(output_path: Path, features: List[dict]):
             },
             "features": features_rounded
         }
+        
+        # Add bbox if provided (in Mercator coordinates)
+        if tile_bbox_merc:
+            min_x, min_y, max_x, max_y = tile_bbox_merc
+            data["bbox"] = [
+                round(min_x, 3),
+                round(min_y, 3),
+                round(max_x, 3),
+                round(max_y, 3)
+            ]
+        
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
     else:
@@ -544,7 +694,7 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
 
     Args:
         input_file: Path to input GeoJSON file
-        output_tiles: List of output tile bounds
+        output_tiles: List of output tile bounds (WGS84)
         output_dir: Directory to save output tiles
         tiles_written: Dictionary tracking feature counts per tile
     """
@@ -555,16 +705,57 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
     if estimated_count > 0:
         print(f"  Estimated features: ~{estimated_count:,}")
 
-    # Create output tile name lookup
+    # Pre-convert tile bounds to Mercator bounding boxes for fast intersection tests
+    # This is done once at startup instead of for every feature
+    tile_bboxes_merc = {}
     tile_files = {}
-    for bounds in output_tiles:
+    
+    print(f"  Converting {len(output_tiles)} tiles to Mercator...")
+    
+    # Build spatial index: grid cells that point to tiles
+    # This avoids checking all 10k tiles for each feature
+    grid_size = 100000.0  # 100km grid cells in Mercator
+    spatial_index = {}  # (grid_x, grid_y) -> list of tile_bounds
+    
+    for idx, bounds in enumerate(output_tiles):
         left_lon, upper_lat, right_lon, lower_lat = bounds
+        
+        # Convert WGS84 tile corners to Mercator
+        min_x, max_y = wgs84_to_mercator(left_lon, upper_lat)
+        max_x, min_y = wgs84_to_mercator(right_lon, lower_lat)
+        
+        # Store Mercator bounding box (min_x, min_y, max_x, max_y)
+        tile_bbox_merc = (min_x, min_y, max_x, max_y)
+        tile_bboxes_merc[bounds] = tile_bbox_merc
+        
+        # Add to spatial index - find which grid cells this tile overlaps
+        grid_x_min = int(min_x / grid_size)
+        grid_x_max = int(max_x / grid_size)
+        grid_y_min = int(min_y / grid_size)
+        grid_y_max = int(max_y / grid_size)
+        
+        for gx in range(grid_x_min, grid_x_max + 1):
+            for gy in range(grid_y_min, grid_y_max + 1):
+                key = (gx, gy)
+                if key not in spatial_index:
+                    spatial_index[key] = []
+                spatial_index[key].append(bounds)
+        
+        # Debug: Print first few tiles
+        if idx < 3:
+            print(f"    Tile {idx}: WGS84 ({left_lon:.1f}, {lower_lat:.1f}, {right_lon:.1f}, {upper_lat:.1f}) -> Mercator ({min_x:.0f}, {min_y:.0f}, {max_x:.0f}, {max_y:.0f})")
+        
+        # Store file path
         filename = get_output_tile_name(left_lon, upper_lat, right_lon, lower_lat)
         tile_files[bounds] = output_dir / filename
+    
+    print(f"  Built spatial index with {len(spatial_index)} grid cells")
 
     # Temporary storage for batched writes
     batch_buffers = {bounds: [] for bounds in output_tiles}
     features_processed = 0
+    features_with_coords = 0
+    features_with_valid_bbox = 0
 
     print(f"  Streaming features from file...")
 
@@ -584,17 +775,64 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
             for feature in features:
                 features_processed += 1
 
-                # Check which tiles this feature belongs to
-                for tile_bounds in output_tiles:
-                    if feature_intersects_tile(feature, tile_bounds):
-                        batch_buffers[tile_bounds].append(feature)
+                # Get bbox center for this feature
+                geometry = feature.get('geometry', {})
+                coordinates = geometry.get('coordinates', [])
+                if not coordinates:
+                    continue
+                
+                features_with_coords += 1
+                
+                bbox_center = get_bbox_center(coordinates)
+                if not bbox_center:
+                    if features_processed <= 3:
+                        print(f"    Feature {features_processed}: INVALID BBOX CENTER")
+                    continue
+
+                features_with_valid_bbox += 1
+                
+                center_x, center_y = bbox_center
+                
+                # Debug: Print first few features
+                if features_processed <= 3:
+                    print(f"    Feature {features_processed}: bbox center=({center_x:.0f}, {center_y:.0f})")
+                    print(f"      Geometry type: {geometry.get('type')}")
+
+                # Use spatial index to find candidate tiles (single grid cell for point)
+                grid_x = int(center_x / grid_size)
+                grid_y = int(center_y / grid_size)
+                
+                key = (grid_x, grid_y)
+                candidate_tiles = spatial_index.get(key, [])
+                
+                # Debug: Print candidate count for first few features
+                if features_processed <= 3:
+                    print(f"      Found {len(candidate_tiles)} candidate tiles")
+
+                # Find THE tile this feature belongs to (should be exactly one)
+                matched_tile = None
+                for tile_bounds in candidate_tiles:
+                    tile_bbox_merc = tile_bboxes_merc[tile_bounds]
+                    if point_in_tile_bbox(bbox_center, tile_bbox_merc):
+                        matched_tile = tile_bounds
+                        break  # Found it, stop searching
+                
+                if matched_tile:
+                    batch_buffers[matched_tile].append(feature)
+                    
+                    # Debug: Print match for first few features
+                    if features_processed <= 3:
+                        print(f"      Matched tile: {matched_tile}")
+                elif features_processed <= 3:
+                    print(f"      WARNING: No matching tile found!")
 
                 # Flush batches when they get large enough
                 for tile_bounds in list(batch_buffers.keys()):
                     batch = batch_buffers[tile_bounds]
                     if len(batch) >= batch_size:
                         output_path = tile_files[tile_bounds]
-                        append_features_to_file(output_path, batch)
+                        tile_bbox_merc = tile_bboxes_merc[tile_bounds]
+                        append_features_to_file(output_path, batch, tile_bbox_merc)
                         # Update counter
                         filename = output_path.name
                         tiles_written[filename] = tiles_written.get(filename, 0) + len(batch)
@@ -604,16 +842,26 @@ def split_input_tile(input_file: Path, output_tiles: List[Tuple[float, float, fl
         if not HAS_TQDM:
             print(f"  Processed: {features_processed:,} features (complete)")
 
+        print(f"  Statistics:")
+        print(f"    Total features processed: {features_processed:,}")
+        print(f"    Features with coordinates: {features_with_coords:,}")
+        print(f"    Features with valid bbox: {features_with_valid_bbox:,}")
+
         if estimated_count > 0:
             accuracy = (features_processed / estimated_count) * 100
             print(f"  Estimation accuracy: {accuracy:.1f}% (estimated {estimated_count:,}, actual {features_processed:,})")
 
         # Flush remaining batches
         print(f"  Writing remaining features...")
+        total_features_in_batches = sum(len(batch) for batch in batch_buffers.values())
+        print(f"  Total features in batches before flush: {total_features_in_batches}")
+        
         for tile_bounds, batch in batch_buffers.items():
             if batch:
                 output_path = tile_files[tile_bounds]
-                append_features_to_file(output_path, batch)
+                tile_bbox_merc = tile_bboxes_merc[tile_bounds]
+                print(f"    Flushing {len(batch)} features to {output_path.name}")
+                append_features_to_file(output_path, batch, tile_bbox_merc)
                 # Update counter
                 filename = output_path.name
                 tiles_written[filename] = tiles_written.get(filename, 0) + len(batch)
@@ -695,3 +943,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
