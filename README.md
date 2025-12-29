@@ -1,19 +1,35 @@
 # GlobalBuildingAtlas Downloader and Tiler
 
-A high-performance Python tool for downloading and processing GlobalBuildingAtlas (GBA) building footprint data. Downloads large GeoJSON files via rsync and splits them into smaller, manageable tiles with configurable resolution.
+A high-performance Python tool for downloading and processing 
+GlobalBuildingAtlas (GBA) building footprint data. 
+Downloads large GeoJSON files via rsync and splits them into smaller,
+manageable tiles with configurable resolution.
+
+### GlobalBuildingAtlas 
+is is a dataset providing global and complete coverage of 
+building polygons (GBA.Polygon), heights (GBA.Height) 
+and Level of Detail 1 (LoD1) 3D building models (GBA.LoD1).
+
+- The dataset is available under: 
+[doi:10.14459/2025mp1782307](https://doi.org/10.14459/2025mp1782307)
+
+- It can be viewed online in the 
+[ GlobalBuildingAtlas web viewer](https://tubvsig-so2sat-vm1.srv.mwn.de/)
+
+- Citation:\
+  Zhu, X. X., Chen, S., Zhang, F., Shi, Y., and Wang, Y., 2025: 
+  _GlobalBuildingAtlas: an open global and complete dataset of building polygons,
+  heights and LoD1 3D models_, Earth Syst. Sci. Data, **17**, 6647–6668,
+  [doi:10.5194/essd-17-6647-2025](https://doi.org/10.5194/essd-17-6647-2025). 
 
 ## Features
 
-- 🌍 **Flexible Area Selection**: Define areas by bounding box or country name
-- 🚀 **High Performance**: Streaming JSON parsing with spatial indexing (~70k features/sec)
-- 💾 **Memory Efficient**: Processes multi-GB files without loading into RAM
-- 📦 **Batch Processing**: Configurable batch sizes for optimal I/O performance
-- 🗺️ **Coordinate Systems**: Automatic conversion between EPSG:3857 (Web Mercator) and WGS84
-- 📊 **Progress Tracking**: Optional progress bars with tqdm
-- 🎯 **Precise Assignment**: Each building assigned to exactly one tile using bbox center
-- 💿 **Space Optimized**: Float precision limited to 1mm (3 decimal places)
-- 📝 **Standard GeoJSON**: Outputs include CRS metadata and tile bounding boxes
-- 🔧 **CLI Interface**: Professional command-line interface with comprehensive help
+- **Flexible Area Selection**: Define areas by bounding box or country name
+- **High Performance**: Streaming JSON parsing with spatial indexing (~70k features/sec)
+- **Memory Efficient**: Processes multi-GB files without loading into RAM
+- **Space Optimized**: Float precision limited to 1mm (3 decimal places)
+- **Standard GeoJSON**: Outputs include CRS metadata and tile bounding boxes
+- **CLI Interface**: Professional command-line interface with comprehensive help
 
 ## Requirements
 
@@ -346,17 +362,16 @@ TEMP_DIR = "GBA_temp"
 - **Format**: GeoJSON with EPSG:3857 coordinates
 - **Access**: see https://mediatum.ub.tum.de/1782307
 
-### rsync Server
+- rsync Server
+  This program loads the data from the rsync server at the TUM library
+  (Universitätsbibliothek der Technischen Universität München)
+  using the (publicly available) credentials:
 
-This program loads the data from the rsync server at the TUM library
-(Universitätsbibliothek der Technischen Universität München)
-using the (publicly available) credentials:
+  ```
+  rsync://m1782307:m1782307@dataserv.ub.tum.de/m1782307/LoD1/europe/
+  ```
 
-```
-rsync://m1782307:m1782307@dataserv.ub.tum.de/m1782307/LoD1/europe/
-```
-
-**Note**: Update credentials in the script if needed.
+  **Note**: Update credentials in the script if needed.
 
 ### Country Boundaries
 
