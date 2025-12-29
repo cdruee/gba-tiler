@@ -151,7 +151,7 @@ def get_output_tile_name(left_lon: float, upper_lat: float, right_lon: float, lo
     lon_right_str = get_coordinate_string(right_lon, True)
     lat_lower_str = get_coordinate_string(lower_lat, False)
 
-    return f"{lon_left_str}_{lat_upper_str}_{lon_right_str}_{lat_lower_str}.geojson"
+    return f"{lon_left_str}_{lat_upper_str}_{lon_right_str}_{lat_lower_str}_lod1.geojson"
 
 
 def get_input_tile_bounds(lon_min: float, lat_min: float, lon_max: float, lat_max: float) -> List[Tuple[float, float, float, float]]:
@@ -354,8 +354,7 @@ def feature_intersects_tile(feature: dict, tile_bounds: Tuple[float, float, floa
 
 def append_features_to_file(output_path: Path, features: List[dict]):
     """
-    Append features to a GeoJSON file without loading entire file into memory.
-    Uses a simple line-based approach.
+    Append features to a GeoJSON file with proper formatting.
 
     Args:
         output_path: Path to output file
@@ -365,13 +364,22 @@ def append_features_to_file(output_path: Path, features: List[dict]):
         return
 
     if not output_path.exists():
-        # Create new file
+        # Create new file with CRS and name metadata
+        # Name is the output filename stem
         data = {
             "type": "FeatureCollection",
+            "name": output_path.stem,
+            "crs": {
+                "type": "name",
+                "properties": {
+                    "name": "urn:ogc:def:crs:EPSG::3857"
+                }
+            },
             "features": features
         }
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+            # Use indent=2 for readability and separators for line breaks after features
+            json.dump(data, f, indent=2, separators=(',', ': '))
     else:
         # Read and append - we must load existing features
         # This is unavoidable for valid GeoJSON format
@@ -379,7 +387,7 @@ def append_features_to_file(output_path: Path, features: List[dict]):
             data = json.load(f)
         data['features'].extend(features)
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+            json.dump(data, f, indent=2, separators=(',', ': '))
 
 
 def estimate_feature_count(input_file: Path) -> int:
