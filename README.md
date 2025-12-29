@@ -64,7 +64,7 @@ pip install tqdm
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://gitlab.rlp.net/druee/gba-tiler.git
 cd gba-tiler
 ```
 
