@@ -40,9 +40,37 @@ except ImportError:
 EARTH_RADIUS = 6378137.0  # meters
 
 
+class RoundingFloat(float):
+    """Float subclass that rounds to 3 decimal places when serializing to JSON."""
+    __repr__ = lambda self: f"{self:.3f}".rstrip('0').rstrip('.')
+
+
+def round_floats(obj, precision=3):
+    """
+    Recursively round all floats in a nested structure to specified precision.
+    
+    Args:
+        obj: Object to process (dict, list, float, etc.)
+        precision: Number of decimal places to keep
+    
+    Returns:
+        Object with all floats rounded
+    """
+    if isinstance(obj, float):
+        return round(obj, precision)
+    elif isinstance(obj, Decimal):
+        return round(float(obj), precision)
+    elif isinstance(obj, dict):
+        return {k: round_floats(v, precision) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [round_floats(item, precision) for item in obj]
+    else:
+        return obj
+
+
 
 # Configuration constants
-DELTA = 0.25  # Tile size in degrees
+DELTA = 0.10  # Tile size in degrees
 LAT_MIN = 45.0  # Minimum latitude of interest
 LAT_MAX = 55.0  # Maximum latitude of interest
 LON_MIN = 5.0   # Minimum longitude of interest
@@ -54,9 +82,43 @@ OUTPUT_DIR = "GBA_tiles"
 TEMP_DIR = "GBA_temp"
 
 # Memory optimization: batch size for writing features
-BATCH_SIZE = 100  # Minimum 1, recommended 50-1000
+BATCH_SIZE = 1000  # Minimum 1, recommended 50-1000
 
 # ----------------------------------------------------------------------------
+
+def get_delta_precision() -> int:
+    """
+    Calculate the number of decimal places to use for rounding based on DELTA.
+    This prevents floating point errors like 14.999999999999964 instead of 15.0
+    
+    Returns the precision as number of decimal places.
+    For DELTA=0.25, returns 2 (round to 0.01)
+    For DELTA=0.10, returns 1 (round to 0.1)
+    For DELTA=0.125, returns 3 (round to 0.001)
+    """
+    # Convert DELTA to string and count decimal places
+    delta_str = f"{DELTA:.10f}".rstrip('0').rstrip('.')
+    if '.' in delta_str:
+        decimal_places = len(delta_str.split('.')[1])
+    else:
+        decimal_places = 0
+    
+    # Return the number of decimal places for rounding
+    return decimal_places
+
+
+def round_coordinate(value: float, precision: int) -> float:
+    """
+    Round a coordinate to the specified precision.
+    
+    Args:
+        value: Coordinate value to round
+        precision: Number of decimal places
+    
+    Returns:
+        Rounded value
+    """
+    return round(value, precision)
 
 def mercator_to_wgs84(x: float, y: float) -> Tuple[float, float]:
     """
@@ -98,17 +160,23 @@ def get_coordinate_string(value: float, is_longitude: bool) -> str:
         is_longitude: True for longitude, False for latitude
 
     Returns:
-        Formatted string (e.g., 'e005' or 'n50')
+        Formatted string (e.g., 'e01450' for 14.50 or 'n5000' for 50.00)
     """
+    # Round to DELTA precision to avoid floating point errors
+    precision = get_delta_precision()
+    value = round_coordinate(value, precision)
+    
     if is_longitude:
         direction = 'e' if value >= 0 else 'w'
         digits = 5  # For output tiles
-        abs_val = abs(int(value*100))
+        # Multiply by 100 to convert to centidegrees (e.g., 14.5 -> 1450)
+        abs_val = abs(int(round(value * 100)))
         return f"{direction}{abs_val:0{digits}d}"
     else:
         direction = 'n' if value >= 0 else 's'
         digits = 4  # For output tiles
-        abs_val = abs(int(value*100))
+        # Multiply by 100 to convert to centidegrees (e.g., 50.0 -> 5000)
+        abs_val = abs(int(round(value * 100)))
         return f"{direction}{abs_val:0{digits}d}"
 
 
@@ -259,29 +327,32 @@ def get_output_tiles() -> List[Tuple[float, float, float, float]]:
         List of (left_lon, upper_lat, right_lon, lower_lat) tuples
     """
     tiles = []
+    
+    # Get rounding precision based on DELTA
+    precision = get_delta_precision()
 
     # Align to grid
-    lon_start = math.floor(LON_MIN / DELTA) * DELTA
-    lon_end = math.ceil(LON_MAX / DELTA) * DELTA
-    lat_start = math.floor(LAT_MIN / DELTA) * DELTA
-    lat_end = math.ceil(LAT_MAX / DELTA) * DELTA
+    lon_start = round_coordinate(math.floor(LON_MIN / DELTA) * DELTA, precision)
+    lon_end = round_coordinate(math.ceil(LON_MAX / DELTA) * DELTA, precision)
+    lat_start = round_coordinate(math.floor(LAT_MIN / DELTA) * DELTA, precision)
+    lat_end = round_coordinate(math.ceil(LAT_MAX / DELTA) * DELTA, precision)
 
     lon = lon_start
     while lon < lon_end:
         lat = lat_start
         while lat < lat_end:
-            left_lon = lon
-            right_lon = lon + DELTA
-            lower_lat = lat
-            upper_lat = lat + DELTA
+            left_lon = round_coordinate(lon, precision)
+            right_lon = round_coordinate(lon + DELTA, precision)
+            lower_lat = round_coordinate(lat, precision)
+            upper_lat = round_coordinate(lat + DELTA, precision)
 
             # Check if this tile overlaps with our area of interest
             if (right_lon > LON_MIN and left_lon < LON_MAX and
                 upper_lat > LAT_MIN and lower_lat < LAT_MAX):
                 tiles.append((left_lon, upper_lat, right_lon, lower_lat))
 
-            lat += DELTA
-        lon += DELTA
+            lat = round_coordinate(lat + DELTA, precision)
+        lon = round_coordinate(lon + DELTA, precision)
 
     return tiles
 
@@ -355,6 +426,7 @@ def feature_intersects_tile(feature: dict, tile_bounds: Tuple[float, float, floa
 def append_features_to_file(output_path: Path, features: List[dict]):
     """
     Append features to a GeoJSON file with proper formatting.
+    All float values are rounded to 3 decimal places (0.001 precision) to save disk space.
 
     Args:
         output_path: Path to output file
@@ -362,6 +434,9 @@ def append_features_to_file(output_path: Path, features: List[dict]):
     """
     if not features:
         return
+
+    # Round all floats in features to 3 decimal places
+    features_rounded = round_floats(features, precision=3)
 
     if not output_path.exists():
         # Create new file with CRS and name metadata
@@ -375,19 +450,18 @@ def append_features_to_file(output_path: Path, features: List[dict]):
                     "name": "urn:ogc:def:crs:EPSG::3857"
                 }
             },
-            "features": features
+            "features": features_rounded
         }
         with open(output_path, 'w', encoding='utf-8') as f:
-            # Use indent=2 for readability and separators for line breaks after features
-            json.dump(data, f, indent=2, separators=(',', ': '))
+            json.dump(data, f)
     else:
         # Read and append - we must load existing features
         # This is unavoidable for valid GeoJSON format
         with open(output_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        data['features'].extend(features)
+        data['features'].extend(features_rounded)
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, separators=(',', ': '))
+            json.dump(data, f)
 
 
 def estimate_feature_count(input_file: Path) -> int:
