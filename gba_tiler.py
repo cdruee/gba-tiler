@@ -264,7 +264,7 @@ def get_feature_bbox_fast(coordinates) -> Tuple[
                 stack.append(item)
 
     if found:
-        return (min_x, min_y, max_x, max_y)
+        return min_x, min_y, max_x, max_y
     return None
 
 
@@ -338,7 +338,7 @@ def get_bbox_center(coordinates) -> Tuple[float, float]:
         # Return center of bounding box
         center_x = (min_x + max_x) / 2.0
         center_y = (min_y + max_y) / 2.0
-        return (center_x, center_y)
+        return center_x, center_y
 
     return None
 
@@ -503,17 +503,17 @@ def download_input_tile(filename: str, temp_dir: Path,
     output_path = temp_dir / filename
 
     if output_path.exists():
-        logger.warning(f"  File already exists: {
-        filename} (file {file_num} of {total_files})")
+        logger.warning(f"  File already exists: {filename}"
+                       f" (file {file_num} of {total_files})")
         return True
 
-    logger.info(f"  Downloading {filename} (file {
-    file_num} of {total_files})...")
+    logger.info(f"  Downloading {filename} (file {file_num}"
+                f" of {total_files})...")
 
     # Construct rsync URL without password in URL
     # (use environment variable instead)
-    rsync_url = f"rsync://m1782307@dataserv.ub.tum.de/m1782307/LoD1/europe/{
-    filename}"
+    rsync_url = (f"rsync://m1782307@dataserv.ub.tum.de/m1782307/"
+                 f"LoD1/europe/{filename}")
 
     # Set password via environment variable
     env = os.environ.copy()
@@ -611,7 +611,7 @@ def point_in_tile(x: float, y: float,
     lon, lat = mercator_to_wgs84(x, y)
 
     left_lon, upper_lat, right_lon, lower_lat = tile_bounds
-    return (left_lon <= lon < right_lon and lower_lat <= lat < upper_lat)
+    return left_lon <= lon < right_lon and lower_lat <= lat < upper_lat
 
 
 def append_features_to_file(output_path: Path, features: List[dict],
@@ -857,8 +857,8 @@ def split_input_tile(input_file: Path,
                 bbox_center = get_bbox_center(coordinates)
                 if not bbox_center:
                     if features_processed <= 3:
-                        logger.error(f"    Feature {
-                        features_processed}: INVALID BBOX CENTER")
+                        logger.error(f"    Feature {features_processed}:"
+                                     f" INVALID BBOX CENTER")
                     continue
 
                 features_with_valid_bbox += 1
@@ -883,8 +883,8 @@ def split_input_tile(input_file: Path,
 
                 # Debug: Print candidate count for first few features
                 if features_processed <= 3:
-                    logger.debug(f"      Found {
-                    len(candidate_tiles)} candidate tiles")
+                    logger.debug(f"      Found {len(candidate_tiles)}"
+                                 f" candidate tiles")
 
                 # Find THE tile this feature belongs to (should be exactly one)
                 matched_tile = None
@@ -920,37 +920,38 @@ def split_input_tile(input_file: Path,
                         batch_buffers[tile_bounds] = []
 
         if not HAS_TQDM:
-            logger.info(f"  Processed: {
-            features_processed:,} features (complete)")
+            logger.info(f"  Processed: {features_processed:,}"
+                        f" features (complete)")
 
         logger.info(f"  Statistics:")
         logger.info(
             f"    Total features processed: {features_processed:,}")
         logger.info(
             f"    Features with coordinates: {features_with_coords:,}")
-        logger.info(f"    Features with valid bbox: {
-        features_with_valid_bbox:,}")
+        logger.info(f"    Features with valid bbox:"
+                    f" {features_with_valid_bbox:,}")
 
         if estimated_count > 0:
             accuracy = (features_processed / estimated_count) * 100
             logger.info(
-                f"  Estimation accuracy: {accuracy:.1f}% (estimated {
-                estimated_count:,}, actual {features_processed:,})")
+                f"  Estimation accuracy: {accuracy:.1f}%"
+                f" (estimated {estimated_count:,},"
+                f" actual {features_processed:,})")
 
         # Flush remaining batches
         logger.info(f"  Writing remaining features...")
         total_features_in_batches = sum(len(batch)
                                         for batch in
                                         batch_buffers.values())
-        logger.info(f"  Total features in batches before flush: {
-        total_features_in_batches}")
+        logger.info(f"  Total features in batches before "
+                    f"flush: {total_features_in_batches}")
 
         for tile_bounds, batch in batch_buffers.items():
             if batch:
                 output_path = tile_files[tile_bounds]
                 tile_bbox_merc = tile_bboxes_merc[tile_bounds]
-                logger.debug(f"    Flushing {len(batch)} features to {
-                output_path.name}")
+                logger.debug(f"    Flushing {len(batch)} "
+                             f"features to {output_path.name}")
                 append_features_to_file(output_path, batch, tile_bbox_merc)
                 # Update counter
                 filename = output_path.name
@@ -1043,8 +1044,6 @@ def download_country_boundary(urls: List[str], cache_file: Path
                     "properties": attributes
                 })
 
-            datasource = None
-
             geojson = {
                 "type": "FeatureCollection",
                 "features": features
@@ -1104,10 +1103,10 @@ def load_country_bbox(country_name: str):
             envelope = geom.GetEnvelope()
             # OGR envelope is (minX, maxX, minY, maxY)
             bbox = (envelope[0], envelope[2], envelope[1], envelope[3])
-            logger.info(f"Country bbox: {bbox[0]:.3f}, {
-            bbox[1]:.3f}, {bbox[2]:.3f}, {bbox[3]:.3f}")
+            logger.info(f"Country bbox: {bbox[0]:.3f},"
+                        f" {bbox[1]:.3f}, {bbox[2]:.3f}, {bbox[3]:.3f}")
             
-            return (bbox, geom)
+            return bbox, geom
 
     logger.error(f"Country '{country_name}' not found")
     return None
@@ -1272,8 +1271,8 @@ def main():
     country_geom = None
     if args.bbox:
         LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = args.bbox
-        logger.info(f"Using bounding box: {LON_MIN}°E to {
-        LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
+        logger.info(f"Using bounding box: {LON_MIN}°E to"
+                    f" {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
     elif args.country:
         result = load_country_bbox(args.country)
         if result is None:
@@ -1282,8 +1281,9 @@ def main():
             sys.exit(1)
         bbox, country_geom = result
         LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = bbox
-        logger.info(f"Using country '{args.country}' bbox: {
-        LON_MIN}°E to {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
+        logger.info(f"Using country '{args.country}'"
+                    f" bbox: {LON_MIN}°E to {LON_MAX}°E,"
+                    f" {LAT_MIN}°N to {LAT_MAX}°N")
 
     logger.info(f"Tile size: {DELTA}°")
     logger.info(f"Batch size: {max(1, BATCH_SIZE)} features")
@@ -1330,8 +1330,8 @@ def main():
 
     # Process and split tiles
     logger.info("Step 4: Splitting tiles...")
-    logger.info(f"Processing {len(downloaded_files)
-    } input file(s) using streaming...")
+    logger.info(f"Processing {len(downloaded_files)} input file(s)"
+                f" using streaming...")
 
     tiles_written = {}  # Track feature counts per output tile
 
