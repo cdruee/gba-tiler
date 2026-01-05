@@ -1230,7 +1230,8 @@ def filter_tiles_by_country(tiles: List[Tuple[float, float, float, float]],
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='GlobalBuildingAtlas Downloader and Tiler',
+        description=f"GlobalBuildingAtlas Downloader and Tiler"
+                    f" Version {VERSION}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
