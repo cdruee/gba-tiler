@@ -57,6 +57,8 @@ try:
 except ImportError:
     HAS_OGR = False
 
+VERSION = "1.2.0"
+
 # Earth radius for Web Mercator projection
 EARTH_RADIUS = 6378137.0  # meters
 
@@ -108,8 +110,17 @@ LON_MIN = 5.0  # Minimum longitude of interest
 LON_MAX = 15.0  # Maximum longitude of interest
 
 # rsync configuration
-RSYNC_SERVER = ("rsync://m1782307:m1782307@dataserv.ub.tum.de/"
-                "m1782307/LoD1/europe/")
+RSYNC_HOST_PATH = ("rsync://m1782307@dataserv.ub.tum.de/"
+                   "m1782307/LoD1")
+RSYNC_REGIONS = [
+    "europe",
+    "africa",
+    "asiaeast",
+    "asiawest",
+    "northamerica",
+    "oceania",
+    "southamerica",
+]
 OUTPUT_DIR = "GBA_tiles"
 TEMP_DIR = "GBA_temp"
 
@@ -433,7 +444,7 @@ def get_output_tile_name(left_lon: float, upper_lat: float,
     lat_lower_str = get_coordinate_string(lower_lat, False)
 
     return (f"{lon_left_str}_{lat_upper_str}_{lon_right_str}"
-            f"_{lat_lower_str}_lod1.geojson")
+            f"_{lat_lower_str}.geojson")
 
 
 def get_input_tile_bounds(lon_min: float, lat_min: float,
@@ -486,8 +497,52 @@ def get_input_filename(left_lon: float, upper_lat: float,
             f"_{lat_lower_str}.geojson")
 
 
+def guess_region(left_lon, upper_lat, right_lon, lower_lat):
+    """
+    Guess which LoD1 region directory a tile belongs to based on its bounds.
+
+    Returns one of:
+    europe, africa, asiaeast, asiawest,
+    northamerica, southamerica, oceania
+    """
+
+    # Center of bounding box
+    lon = (left_lon + right_lon) / 2.0
+    lat = (upper_lat + lower_lat) / 2.0
+
+    # ---- Americas ----
+    if lon < -30:
+        if lat >= 15:
+            return "northamerica"
+        else:
+            return "southamerica"
+
+    # ---- Africa ----
+    if -30 <= lon <= 60 and lat < 35:
+        return "africa"
+
+    # ---- Europe ----
+    if -15 <= lon <= 60 and lat >= 35:
+        return "europe"
+
+    # ---- Asia ----
+    if lon > 60:
+        if lon >= 100:
+            return "asiaeast"
+        else:
+            return "asiawest"
+
+    # ---- Oceania ----
+    if lon > 110 and lat < 0:
+        return "oceania"
+
+    # ---- Fallback ----
+    return "europe"
+
+
 def download_input_tile(filename: str, temp_dir: Path,
-                        file_num: int, total_files: int) -> bool:
+                        file_num: int, total_files: int,
+                        region_guess: str | None = None) -> bool:
     """
     Download a single input tile via rsync.
 
@@ -510,44 +565,61 @@ def download_input_tile(filename: str, temp_dir: Path,
     logger.info(f"  Downloading {filename} (file {file_num}"
                 f" of {total_files})...")
 
-    # Construct rsync URL without password in URL
-    # (use environment variable instead)
-    rsync_url = (f"rsync://m1782307@dataserv.ub.tum.de/m1782307/"
-                 f"LoD1/europe/{filename}")
-
     # Set password via environment variable
     env = os.environ.copy()
     env["RSYNC_PASSWORD"] = "m1782307"
 
-    try:
-        # Use --progress to show progress bar,
-        # --no-motd to suppress message of the day
-        result = subprocess.run(
-            ["rsync", "-av", "--progress", "--no-motd",
-             rsync_url, str(output_path)],
-            capture_output=False,  # Don't capture so progress bar shows
-            text=True,
-            timeout=300,
-            env=env
-        )
+    # Try each region directory until the file is found
+    last_error = None
+    if region_guess:
+        regions = [region_guess] + [x for x in RSYNC_REGIONS
+                                    if x != region_guess]
+    else:
+        regions = RSYNC_REGIONS
+    for region in regions:
+        rsync_url = f"{RSYNC_HOST_PATH}/{region}/{filename}"
+        logger.info(f"    Trying region '{region}'...")
 
-        if result.returncode == 0:
-            logger.info(f"  ✓ Downloaded {filename}")
-            return True
-        else:
-            logger.error(f"  ✗ Failed to download {filename}")
-            return False
+        try:
+            # Use --progress to show progress bar,
+            # --no-motd to suppress message of the day
+            result = subprocess.run(
+                ["rsync", "-av", "--progress", "--no-motd",
+                 rsync_url, str(output_path)],
+                capture_output=False,  # keep progress visible
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=300,
+                env=env
+            )
 
-    except subprocess.TimeoutExpired:
-        logger.error(f"  ✗ Timeout downloading {filename}")
-        return False
-    except FileNotFoundError:
-        logger.critical(
-            f"  ✗ rsync command not found. Please install rsync.")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"  ✗ Error downloading {filename}: {e}")
-        return False
+            if result.returncode == 0:
+                logger.info(
+                    f"  ✓ Downloaded {filename} from '{region}'")
+                return True
+
+            # non-zero: usually "file not found" or similar
+            last_error = f"rsync exit code {result.returncode} (region={region})"
+
+            # If rsync created a partial file, remove it before next attempt
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                except Exception:
+                    pass
+
+        except subprocess.TimeoutExpired:
+            last_error = f"timeout (region={region})"
+        except FileNotFoundError:
+            logger.critical(
+                "  ✗ rsync command not found. Please install rsync.")
+            sys.exit(1)
+        except Exception as e:
+            last_error = f"{e} (region={region})"
+
+    logger.error(f"  ✗ Failed to download {filename} from any region"
+                 f" ({last_error})")
+    return False
 
 
 def get_output_tiles() -> List[Tuple[float, float, float, float]]:
@@ -900,9 +972,9 @@ def split_input_tile(input_file: Path,
                     # Debug: Print match for first few features
                     if features_processed <= 3:
                         logger.debug(f"      Matched tile: {matched_tile}")
-                elif features_processed <= 3:
+                elif features_processed < 1:
                     logger.warning(
-                        f"      WARNING: No matching tile found!")
+                        f"      WARNING: No features instide output tile!")
 
                 # Flush batches when they get large enough
                 for tile_bounds in list(batch_buffers.keys()):
@@ -1321,7 +1393,10 @@ def main():
               ) in enumerate(input_tiles, 1):
         filename = get_input_filename(
             left_lon, upper_lat, right_lon, lower_lat)
-        if download_input_tile(filename, temp_dir, idx, len(input_tiles)):
+        region_guess = guess_region(
+            left_lon, upper_lat, right_lon, lower_lat)
+        if download_input_tile(filename, temp_dir, idx, len(input_tiles),
+                               region_guess=region_guess):
             downloaded_files.append(temp_dir / filename)
 
     if not downloaded_files:
