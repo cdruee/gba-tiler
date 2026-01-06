@@ -57,6 +57,6 @@ gba-test-country = "test_country_intersection:main"
 py-modules = ["gba_tiler", "add_bbox_to_tiles", "test_country_intersection"]
 
 [tool.setuptools_scm]
-# Version file is optional for standalone scripts
+# Don't write version file for standalone scripts
 version_scheme = "python-simplified-semver"
 local_scheme = "no-local-version"

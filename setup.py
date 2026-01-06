@@ -7,7 +7,6 @@ from setuptools import setup, find_packages
 setup(
     name="gba-tiler",
     use_scm_version={
-        "write_to": "gba_tiler/_version.py",
         "version_scheme": "python-simplified-semver",
         "local_scheme": "no-local-version",
     },
