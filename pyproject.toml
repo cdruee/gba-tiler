@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gba-tiler"
+dynamic = ["version"]
+description = "High-performance tool for downloading and tiling GlobalBuildingAtlas data"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "EUPL-1.2"}
+authors = [
+    {name = "Clemens Drüe", email = "druee@uni-trier.de"}
+]
+keywords = ["GIS", "building-footprints", "geojson", "spatial-data", "tiling"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: European Union Public Licence 1.2 (EUPL 1.2)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "ijson>=3.1.0",
+    "requests>=2.25.0",
+    "GDAL>=3.0.0",
+]
+
+[project.optional-dependencies]
+progress = ["tqdm>=4.50.0"]
+dev = [
+    "setuptools_scm",
+    "build",
+    "twine",
+    "pytest",
+]
+
+[project.urls]
+Homepage = "https://gitlab.rlp.net/druee/gba-tiler"
+Documentation = "https://gitlab.rlp.net/druee/gba-tiler/-/blob/main/README.md"
+Repository = "https://gitlab.rlp.net/druee/gba-tiler"
+"Bug Tracker" = "https://gitlab.rlp.net/druee/gba-tiler/-/issues"
+
+[project.scripts]
+gba-tiler = "gba_tiler:main"
+gba-add-bbox = "add_bbox_to_tiles:main"
+gba-test-country = "test_country_intersection:main"
+
+[tool.setuptools]
+py-modules = ["gba_tiler", "add_bbox_to_tiles", "test_country_intersection"]
+
+[tool.setuptools_scm]
+# Version file is optional for standalone scripts
+version_scheme = "python-simplified-semver"
+local_scheme = "no-local-version"

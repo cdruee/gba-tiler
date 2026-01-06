@@ -29,6 +29,8 @@ import io
 
 try:
     import ijson
+    # Log which backend ijson is using
+    logger = logging.getLogger(__name__)
 except ImportError:
     print("Error: ijson module is required for streaming JSON parsing.")
     print("Please install it with: pip install ijson")
@@ -583,23 +585,43 @@ def download_input_tile(filename: str, temp_dir: Path,
         try:
             # Use --progress to show progress bar,
             # --no-motd to suppress message of the day
-            result = subprocess.run(
+            rsync = subprocess.Popen(
                 ["rsync", "-av", "--progress", "--no-motd",
                  rsync_url, str(output_path)],
-                capture_output=False,  # keep progress visible
-                stderr=subprocess.DEVNULL,
+                #capture_output=False,  # keep progress visible
+                stdout = subprocess.PIPE,
+                stderr = subprocess.DEVNULL,
                 text=True,
-                timeout=300,
                 env=env
             )
 
-            if result.returncode == 0:
+            bar = None
+            for line in rsync.stdout:
+                if logger.getEffectiveLevel() == logging.DEBUG:
+                    print (line)
+                else:
+                    if "%" in line:
+                        if not bar:
+                            bar = tqdm(total=100,
+                                       desc=f"{filename} ({region:12s})",
+                                       unit="%")
+                        try:
+                            parts = line.split()
+                            if len(parts) > 2:
+                                perc = float(line.split()[1].rstrip("%"))
+                        except (IndexError, ValueError):
+                            pass
+                        bar.update(perc - bar.n)
+            rsync.wait()
+            if bar: del(bar)
+
+            if rsync.returncode == 0:
                 logger.info(
                     f"  ✓ Downloaded {filename} from '{region}'")
                 return True
 
             # non-zero: usually "file not found" or similar
-            last_error = f"rsync exit code {result.returncode} (region={region})"
+            last_error = f"rsync exit code {rsync.returncode} (region={region})"
 
             # If rsync created a partial file, remove it before next attempt
             if output_path.exists():
@@ -835,6 +857,26 @@ def split_input_tile(input_file: Path,
         tiles_written: Dictionary tracking feature counts per tile
     """
     logger.info(f"\n  Processing {input_file.name}...")
+    
+    # Validate file before processing
+    try:
+        file_size = input_file.stat().st_size
+        if file_size == 0:
+            logger.error(f"  ✗ File is empty: {input_file.name}")
+            return
+        
+        logger.debug(f"  File size: {file_size / (1024**2):.2f} MB")
+        
+        # Quick check: verify it starts like JSON
+        with open(input_file, 'rb') as f:
+            first_bytes = f.read(100)
+            if not first_bytes.strip().startswith(b'{'):
+                logger.error(f"  ✗ File does not appear to be JSON")
+                logger.error(f"     First bytes: {first_bytes[:50]}")
+                return
+    except Exception as e:
+        logger.error(f"  ✗ Cannot validate file: {e}")
+        return
 
     # Estimate feature count for progress reporting
     estimated_count = estimate_feature_count(input_file)
@@ -1035,10 +1077,54 @@ def split_input_tile(input_file: Path,
 
         logger.debug(f"  ✓ Completed processing {input_file.name}")
 
+    except json.JSONDecodeError as e:
+        logger.error(f"  ✗ JSON parsing error in {input_file.name}:")
+        logger.error(f"     {e}")
+        logger.error(f"     Successfully processed {features_processed:,} features before error")
+        logger.error(f"     Position in file: character {e.pos}")
+        
+        # Show context around error if in debug mode
+        if logger.getEffectiveLevel() == logging.DEBUG:
+            try:
+                with open(input_file, 'rb') as f:
+                    f.seek(max(0, e.pos - 200))
+                    context = f.read(400).decode('utf-8', errors='replace')
+                    logger.debug(f"     Context around error:")
+                    logger.debug(f"     ...{context}...")
+            except Exception:
+                pass
+        
+        # Try to give context about which feature failed
+        if features_processed > 0:
+            logger.error(f"     Error likely in feature #{features_processed + 1}")
+        
+        logger.error(f"     File may be corrupted or have encoding issues")
+        logger.info(f"     Suggestion: Try re-downloading this file")
+        
+        # Show what we managed to process
+        if features_with_valid_bbox > 0:
+            logger.info(f"     Partial results: Processed {features_with_valid_bbox:,} valid features")
+            logger.info(f"     Continuing with next file...")
+        
+    except ijson.JSONError as e:
+        logger.error(f"  ✗ ijson parsing error in {input_file.name}:")
+        logger.error(f"     {e}")
+        logger.error(f"     Successfully processed {features_processed:,} features before error")
+        logger.error(f"     This may indicate a malformed feature in the GeoJSON")
+        
+        # Show which feature failed
+        if features_processed > 0:
+            logger.error(f"     Failed at feature #{features_processed + 1}")
+        
+        logger.info(f"     Try using: ijson backend 'python' for better error messages")
+        logger.info(f"     Continuing with next file...")
+    
     except Exception as e:
-        logger.debug(f"  ✗ Error processing {input_file.name}: {e}")
+        logger.error(f"  ✗ Error processing {input_file.name}: {e}")
+        logger.error(f"     Processed {features_processed:,} features before error")
         import traceback
-        traceback.logger.debug_exc()
+        if logger.getEffectiveLevel() == logging.DEBUG:
+            traceback.print_exc()
 
 
 def download_country_boundary(urls: List[str], cache_file: Path
@@ -1133,9 +1219,15 @@ def download_country_boundary(urls: List[str], cache_file: Path
         return None
 
 
-def load_country_bbox(country_name: str):
+def load_country_bbox(name: str | None = None,
+                      iso2: str | None = None,
+                      iso3: str | None = None):
     """
     Load country bounding box and geometry from Natural Earth data.
+    Parameter:
+        - name: Country Name
+        - iso2: Country ISO two-letter code
+        - iso3: Country ISO three-letter code
 
     Returns:
         Tuple of (bbox, geometry) where:
@@ -1164,10 +1256,22 @@ def load_country_bbox(country_name: str):
             properties.get('ADMIN', ''),
             properties.get('NAME_EN', '')
         ]
+        isotwo = [
+            properties.get('ISO_A2_EH', ''),
+        ]
+        isothree = [
+            properties.get('ISO_A3_EH', ''),
+        ]
 
-        if any(country_name.lower() in name.lower() for name in names):
-            logger.info(
-                f"Found country: {properties.get('NAME', 'Unknown')}")
+        if (
+            (name and any(name.lower() in db_name.lower() for db_name in names))
+            or
+            (iso2 and any(iso2.upper() == db_iso2.upper() for db_iso2 in isotwo))
+            or
+            (iso3 and any(iso3.upper() == db_iso3.upper() for db_iso3 in isothree))
+        ):
+            country_name = properties.get('NAME', 'Unknown')
+            logger.info(f"Found country: {country_name}")
 
             geom_json = json.dumps(feature['geometry'])
             geom = ogr.CreateGeometryFromJson(geom_json)
@@ -1178,9 +1282,14 @@ def load_country_bbox(country_name: str):
             logger.info(f"Country bbox: {bbox[0]:.3f},"
                         f" {bbox[1]:.3f}, {bbox[2]:.3f}, {bbox[3]:.3f}")
             
-            return bbox, geom
+            return bbox, geom, country_name
 
-    logger.error(f"Country '{country_name}' not found")
+    if name:
+        logger.error(f"Country name '{name}' not found")
+    elif iso2:
+        logger.info(f"Country code '{iso2}' not found")
+    elif iso3:
+        logger.info(f"Country code '{iso3}' not found")
     return None
 
 
@@ -1264,6 +1373,18 @@ Examples:
         metavar='NAME',
         help='Country name (e.g., "Germany", "France")'
     )
+    area_group.add_argument(
+        '--iso2',
+        type=str,
+        metavar='CODE',
+        help='Country ISO 2-letter code (e.g., "DE", "FR")'
+    )
+    area_group.add_argument(
+        '--iso3',
+        type=str,
+        metavar='CODE',
+        help='Country ISO 3-letter code (e.g., "DEU", "FRA")'
+    )
 
     # Logging (mutually exclusive)
     log_group = parser.add_mutually_exclusive_group()
@@ -1342,21 +1463,32 @@ def main():
 
     # Determine area of interest
     country_geom = None
+    country_name = None
     if args.bbox:
         LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = args.bbox
         logger.info(f"Using bounding box: {LON_MIN}°E to"
                     f" {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
-    elif args.country:
-        result = load_country_bbox(args.country)
+    elif args.country or args.iso2 or args.iso3:
+        search_term = args.country or args.iso2 or args.iso3
+        if args.country:
+            result = load_country_bbox(name=args.country)
+        elif args.iso2:
+            result = load_country_bbox(iso2=args.iso2)
+        elif args.iso3:
+            result = load_country_bbox(iso3=args.iso3)
         if result is None:
             logger.critical(
-                f"Could not load boundaries for country: {args.country}")
+                f"Could not load boundaries for: {search_term}")
             sys.exit(1)
-        bbox, country_geom = result
+        bbox, country_geom, country_name = result
         LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = bbox
-        logger.info(f"Using country '{args.country}'"
-                    f" bbox: {LON_MIN}°E to {LON_MAX}°E,"
-                    f" {LAT_MIN}°N to {LAT_MAX}°N")
+        
+        # Prominent country message
+        logger.info("=" * 60)
+        logger.info(f"  Processing country: {country_name}")
+        logger.info("=" * 60)
+        logger.info(f"Bounding box: {LON_MIN:.3f}°E to {LON_MAX:.3f}°E,"
+                    f" {LAT_MIN:.3f}°N to {LAT_MAX:.3f}°N")
 
     logger.info(f"Tile size: {DELTA}°")
     logger.info(f"Batch size: {max(1, BATCH_SIZE)} features")

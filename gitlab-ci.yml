@@ -1,0 +1,113 @@
+stages:
+  - test
+  - build
+  - release
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+# Test stage - run on all commits
+test:
+  stage: test
+  image: python:3.11
+  before_script:
+    - pip install --upgrade pip
+    - pip install pytest flake8
+  script:
+    - echo "Running syntax check..."
+    - python3 -m py_compile gba_tiler.py add_bbox_to_tiles.py test_country_intersection.py
+    - echo "Running flake8..."
+    - flake8 gba_tiler.py add_bbox_to_tiles.py test_country_intersection.py --max-line-length=88 --ignore=E501,W503 || true
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+      when: on_success
+
+# Build package - only on tags
+build:
+  stage: build
+  image: python:3.11
+  before_script:
+    - pip install --upgrade pip
+    - pip install build setuptools_scm twine
+  script:
+    - echo "Building package for $CI_COMMIT_TAG"
+    - python -m build
+    - twine check dist/*
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+((a|b|rc)\d+(\.\d+)*)?$/'
+      when: on_success
+
+# Upload to PyPI - only on version tags
+pypi:
+  stage: release
+  image: python:3.11
+  needs:
+    - build
+  before_script:
+    - pip install --upgrade pip twine
+  script:
+    - echo "Uploading to PyPI..."
+    - twine upload dist/* -u __token__ -p $PYPI_TOKEN
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+((a|b|rc)\d+(\.\d+)*)?$/'
+      when: on_success
+  dependencies:
+    - build
+
+# Upload to Test PyPI - on pre-release tags
+test-pypi:
+  stage: release
+  image: python:3.11
+  needs:
+    - build
+  before_script:
+    - pip install --upgrade pip twine
+  script:
+    - echo "Uploading to Test PyPI..."
+    - twine upload --repository testpypi dist/* -u __token__ -p $TEST_PYPI_TOKEN
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(a|b|rc)\d+(\.\d+)*$/'
+      when: on_success
+  dependencies:
+    - build
+  allow_failure: true
+
+# Create GitLab release
+gitlab-release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - build
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+((a|b|rc)\d+(\.\d+)*)?$/'
+      when: on_success
+  script:
+    - echo "Creating GitLab release for $CI_COMMIT_TAG"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Release $CI_COMMIT_TAG"
+    description: |
+      Automated release for version $CI_COMMIT_TAG
+      
+      ## Installation
+      
+      ```bash
+      pip install gba-tiler==$CI_COMMIT_TAG
+      ```
+      
+      ## Changes
+      
+      See [CHANGELOG](CHANGELOG.md) for details.
+    assets:
+      links:
+        - name: "PyPI Package"
+          url: "https://pypi.org/project/gba-tiler/$CI_COMMIT_TAG/"
+

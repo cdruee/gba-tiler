@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include pyproject.toml
+include setup.py
+include gba_tiler.py
+include add_bbox_to_tiles.py
+include test_country_intersection.py
+
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude .git*
+global-exclude .DS_Store
