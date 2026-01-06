@@ -26,6 +26,17 @@ import math
 import zipfile
 import io
 
+# Version detection - works both installed and standalone
+try:
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        __version__ = version("gba-tiler")
+    except PackageNotFoundError:
+        __version__ = "development"
+except ImportError:
+    # Python < 3.8
+    __version__ = "unknown"
+
 try:
     import requests
     HAS_REQUESTS = True
@@ -406,7 +417,7 @@ def test_tile_intersection(tile_bbox: Tuple[float, float, float, float],
 
 def main():
     """Main execution function."""
-    print("GeoJSON Tile - Country Intersection Tester")
+    print(f"GeoJSON Tile - Country Intersection Tester v{__version__}")
     print("=" * 60)
     print(f"Country: {COUNTRY_NAME}")
     print(f"Input directory: {INPUT_DIR}")

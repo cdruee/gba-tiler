@@ -22,6 +22,17 @@ from pathlib import Path
 from typing import Tuple, Optional
 import math
 
+# Version detection - works both installed and standalone
+try:
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        __version__ = version("gba-tiler")
+    except PackageNotFoundError:
+        __version__ = "development"
+except ImportError:
+    # Python < 3.8
+    __version__ = "unknown"
+
 # Directory containing the GeoJSON tile files
 INPUT_DIR = "GBA_tiles"
 OUTPUT_DIR = "GBA_tiles_with_bbox"  # Set to None to modify files in-place
@@ -167,7 +178,7 @@ def add_bbox_to_file(input_path: Path, output_path: Path) -> bool:
 
 def main():
     """Main execution function."""
-    print("GeoJSON Tile BBox Adder")
+    print(f"GeoJSON Tile BBox Adder v{__version__}")
     print("=" * 50)
     
     input_dir = Path(INPUT_DIR)

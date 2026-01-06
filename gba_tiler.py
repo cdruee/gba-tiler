@@ -27,6 +27,17 @@ import logging
 import zipfile
 import io
 
+# Version detection - works both installed and standalone
+try:
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        __version__ = version("gba-tiler")
+    except PackageNotFoundError:
+        __version__ = "development"
+except ImportError:
+    # Python < 3.8
+    __version__ = "unknown"
+
 try:
     import ijson
     # Log which backend ijson is using
@@ -59,7 +70,7 @@ try:
 except ImportError:
     HAS_OGR = False
 
-VERSION = "1.2.0"
+# Removed: VERSION constant replaced with __version__ from importlib.metadata
 
 # Earth radius for Web Mercator projection
 EARTH_RADIUS = 6378137.0  # meters
@@ -1339,23 +1350,38 @@ def filter_tiles_by_country(tiles: List[Tuple[float, float, float, float]],
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description=f"GlobalBuildingAtlas Downloader and Tiler"
-                    f" Version {VERSION}",
+        description="GlobalBuildingAtlas Downloader and Tiler",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
   # Use bounding box
   %(prog)s --bbox 5.0 45.0 15.0 55.0
 
-  # Use country boundary
+  # Use country name
   %(prog)s --country Germany
+
+  # Use ISO 2-letter code
+  %(prog)s --iso2 DE
+
+  # Use ISO 3-letter code
+  %(prog)s --iso3 DEU
 
   # With verbose output
   %(prog)s --country France --verbose
 
   # With debug output
   %(prog)s --bbox 10.0 50.0 11.0 51.0 --debug
+
+  # Show version
+  %(prog)s --version
         '''
+    )
+    
+    # Add version argument
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'%(prog)s {__version__}'
     )
 
     # Area specification (mutually exclusive)

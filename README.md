@@ -61,14 +61,33 @@ pip install tqdm
 
 ## Installation
 
-### 1. Clone the Repository
+### Option 1: Install from PyPI (Recommended)
+
+```bash
+# Install the package
+pip install gba-tiler
+
+# With optional progress bars
+pip install gba-tiler[progress]
+```
+
+After installation, the commands are available globally:
+```bash
+gba-tiler --help
+gba-add-bbox --help
+gba-test-country --help
+```
+
+### Option 2: Install from Source
+
+#### 1. Clone the Repository
 
 ```bash
 git clone https://gitlab.rlp.net/druee/gba-tiler.git
 cd gba-tiler
 ```
 
-### 2. Install Python Dependencies
+#### 2. Install Python Dependencies
 
 ```bash
 # Required
@@ -78,7 +97,7 @@ pip install ijson requests gdal
 pip install tqdm
 ```
 
-### 3. Install rsync (if not already installed)
+#### 3. Install rsync (if not already installed)
 
 **Ubuntu/Debian:**
 ```bash
@@ -127,6 +146,34 @@ python gba_tiler.py --country Germany
 python gba_tiler.py --country "France"
 ```
 
+#### Using ISO Country Codes
+
+```bash
+# Using ISO 2-letter code
+python gba_tiler.py --iso2 <code>
+
+# Using ISO 3-letter code
+python gba_tiler.py --iso3 <code>
+```
+
+Example:
+```bash
+# Process Germany using ISO codes
+python gba_tiler.py --iso2 DE
+python gba_tiler.py --iso3 DEU
+
+# Process France using ISO codes
+python gba_tiler.py --iso2 FR
+python gba_tiler.py --iso3 FRA
+```
+
+### Version Information
+
+```bash
+# Show version
+python gba_tiler.py --version
+```
+
 ### Logging Options
 
 By default, the script runs silently (only shows errors). Use logging options for more output:
@@ -153,7 +200,8 @@ python gba_tiler.py --country Germany \
 ### Complete Command-Line Reference
 
 ```
-usage: gba_tiler.py [-h] (--bbox LON_MIN LAT_MIN LON_MAX LAT_MAX | --country NAME)
+usage: gba_tiler.py [-h] [--version]
+                    (--bbox LON_MIN LAT_MIN LON_MAX LAT_MAX | --country NAME | --iso2 CODE | --iso3 CODE)
                     [-v | --debug] [--delta DEGREES] [--batch-size N]
                     [--output-dir DIR] [--temp-dir DIR]
 
@@ -161,11 +209,20 @@ GlobalBuildingAtlas Downloader and Tiler
 
 optional arguments:
   -h, --help            show this help message and exit
+  --version             show program's version number and exit
+  
+  Area specification (mutually exclusive - choose one):
   --bbox LON_MIN LAT_MIN LON_MAX LAT_MAX
                         Bounding box: min_lon min_lat max_lon max_lat (in degrees)
   --country NAME        Country name (e.g., "Germany", "France")
+  --iso2 CODE           Country ISO 2-letter code (e.g., "DE", "FR")
+  --iso3 CODE           Country ISO 3-letter code (e.g., "DEU", "FRA")
+  
+  Logging (mutually exclusive):
   -v, --verbose         Enable verbose output (INFO level)
   --debug               Enable debug output (DEBUG level)
+  
+  Optional parameters:
   --delta DEGREES       Tile size in degrees (default: 0.10)
   --batch-size N        Batch size for writing features (default: 1000)
   --output-dir DIR      Output directory (default: GBA_tiles)
@@ -449,7 +506,14 @@ pip install gdal
 ### Example 1: Process Germany
 
 ```bash
+# Using country name
 python gba_tiler.py --country Germany --verbose
+
+# Using ISO-2 code
+python gba_tiler.py --iso2 DE --verbose
+
+# Using ISO-3 code
+python gba_tiler.py --iso3 DEU --verbose
 ```
 
 ### Example 2: Custom Tile Size
@@ -487,6 +551,13 @@ python gba_tiler.py --bbox 13.0 52.3 13.8 52.7 --verbose
 
 # Munich area
 python gba_tiler.py --bbox 11.3 48.0 11.8 48.3 --verbose
+```
+
+### Example 6: Version Information
+
+```bash
+# Check version
+python gba_tiler.py --version
 ```
 
 ## Contributing
