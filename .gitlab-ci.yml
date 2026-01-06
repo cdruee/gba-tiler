@@ -110,4 +110,3 @@ gitlab-release:
       links:
         - name: "PyPI Package"
           url: "https://pypi.org/project/gba-tiler/$CI_COMMIT_TAG/"
-
