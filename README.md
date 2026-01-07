@@ -587,32 +587,11 @@ If you use this tool in research, please cite:
 [Add citation information]
 ```
 
-## Acknowledgments
-
-- **GlobalBuildingAtlas**: DLR (German Aerospace Center)
-- **Natural Earth Data**: Free vector and raster map data
-- **Contributors**: [List contributors]
-
 ## Contact
 
-- **Issues**: [GitHub Issues URL]
-- **Email**: [Contact email]
-- **Documentation**: [Documentation URL]
+- **Email**: druee@uni-trier.de
 
-## Changelog
-
-### Version 1.0.0 (Current)
-
-- Initial release
-- Bounding box and country boundary support
-- Streaming JSON parsing
-- Spatial indexing
-- CLI interface with logging
-- Memory-efficient batch processing
-- Float precision optimization
-- Coordinate system conversion
-- Progress tracking with tqdm
 
 ---
 
-**Last Updated**: December 2024
+**Last Updated**: 07 Jan 2026
