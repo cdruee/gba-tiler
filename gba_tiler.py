@@ -77,9 +77,9 @@ EARTH_RADIUS = 6378137.0  # meters
 
 # Natural Earth Data URLs for country boundaries
 CACHE_DIR = ".country_borders_cache"
-SIMPLIFIED_COUNTRY_URLS = [
-    "https://naciscdn.org/naturalearth/110m/cultural/"
-    "ne_110m_admin_0_countries.zip",
+DETAILED_COUNTRY_URLS = [
+    "https://naciscdn.org/naturalearth/10m/cultural/"
+    "ne_10m_admin_0_countries.zip",
 ]
 
 # Setup logging
@@ -1252,9 +1252,9 @@ def load_country_bbox(name: str | None = None,
         logger.error("Install with: pip install requests gdal")
         return None
 
-    cache_file = Path(CACHE_DIR) / "countries_110m.geojson"
+    cache_file = Path(CACHE_DIR) / "countries_10m.geojson"
 
-    geojson = download_country_boundary(SIMPLIFIED_COUNTRY_URLS,
+    geojson = download_country_boundary(DETAILED_COUNTRY_URLS,
                                         cache_file)
     if not geojson:
         return None
@@ -1269,17 +1269,21 @@ def load_country_bbox(name: str | None = None,
         ]
         isotwo = [
             properties.get('ISO_A2_EH', ''),
+            properties.get('ISO_A2', ''),  # Fallback for countries with -99 in _EH
         ]
         isothree = [
             properties.get('ISO_A3_EH', ''),
+            properties.get('ISO_A3', ''),  # Fallback for countries with -99 in _EH
         ]
 
         if (
             (name and any(name.lower() in db_name.lower() for db_name in names))
             or
-            (iso2 and any(iso2.upper() == db_iso2.upper() for db_iso2 in isotwo))
+            (iso2 and any(iso2.upper() == db_iso2.upper() and db_iso2 != '-99' 
+                         for db_iso2 in isotwo))
             or
-            (iso3 and any(iso3.upper() == db_iso3.upper() for db_iso3 in isothree))
+            (iso3 and any(iso3.upper() == db_iso3.upper() and db_iso3 != '-99' 
+                         for db_iso3 in isothree))
         ):
             country_name = properties.get('NAME', 'Unknown')
             logger.info(f"Found country: {country_name}")
