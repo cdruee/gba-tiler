@@ -11,7 +11,7 @@ cache:
   paths:
     - .cache/pip
 
-# Test stage - run on branches only (not tags)
+# Test stage - run on tags only
 test:
   stage: test
   image: python:3.11
@@ -24,10 +24,8 @@ test:
     - echo "Running flake8..."
     - flake8 gba_tiler.py --max-line-length=88 --ignore=E501,W503 || true
   rules:
-    - if: '$CI_COMMIT_BRANCH'
-      when: on_success
     - if: '$CI_COMMIT_TAG'
-      when: never
+      when: on_success
 
 # Build package - only on tags (excluding dev tags)
 build:
