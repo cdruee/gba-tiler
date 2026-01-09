@@ -4,7 +4,7 @@
 
 ### Added:
 
-- API
+- API 
 - Programming examples for API use
 
 ### Changed:
