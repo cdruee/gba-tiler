@@ -1,23 +1,16 @@
 # Changelog
 
-## [1.3.0]  - 2025-01-07
+## [1.4.0]  - 2025-01-08
 
 ### Added:
 
-- ISO country code support (--iso2, --iso3)
-- Version display with --version
-- Better error handling for JSON parsing
-- File validation
+- API
+- Programming examples for API use
 
 ### Changed:
 
-- Improved country filtering logic
 - Updated documentation
 
-### Fixed:
-
-- CI/CD issues (shallow clone, protected variables)
-- Version file creation errors
 
 ## [1.2.0] - 2025-01-05
 
