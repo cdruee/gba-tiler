@@ -1,10 +1,12 @@
 include README.md
 include LICENSE
+include CHANGELOG.md
 include pyproject.toml
 include setup.py
 include gba_tiler.py
-include add_bbox_to_tiles.py
-include test_country_intersection.py
+include example_api.py
+include example_EU_countries.py
+include countries_EU.csv
 
 global-exclude __pycache__
 global-exclude *.py[co]

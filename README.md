@@ -24,7 +24,8 @@ and Level of Detail 1 (LoD1) 3D building models (GBA.LoD1).
 
 ## Features
 
-- **Flexible Area Selection**: Define areas by bounding box or country name
+- **Flexible Area Selection**: Define areas by bounding box, country name, or ISO codes
+- **Python API**: Use programmatically from Python code with simple function calls
 - **High Performance**: Streaming JSON parsing with spatial indexing (~70k features/sec)
 - **Memory Efficient**: Processes multi-GB files without loading into RAM
 - **Space Optimized**: Float precision limited to 1mm (3 decimal places)
@@ -71,11 +72,16 @@ pip install gba-tiler
 pip install gba-tiler[progress]
 ```
 
-After installation, the commands are available globally:
+After installation, the command is available globally:
 ```bash
 gba-tiler --help
-gba-add-bbox --help
-gba-test-country --help
+gba-tiler --version
+```
+
+For API usage in Python:
+```python
+import gba_tiler
+gba_tiler.main(country="Germany")
 ```
 
 ### Option 2: Install from Source
@@ -229,6 +235,51 @@ optional arguments:
   --temp-dir DIR        Temporary directory (default: GBA_temp)
 ```
 
+### Programmatic Usage (Python API)
+
+The `gba_tiler` can also be used programmatically from Python code:
+
+```python
+import logging
+import gba_tiler
+
+# Optional: Configure logging before importing
+logging.basicConfig(level=logging.INFO)
+
+# Process by country name
+gba_tiler.main(country="Luxembourg")
+
+# Process by ISO code with custom settings
+gba_tiler.main(
+    iso2="DE",
+    delta=0.05,
+    batch_size=2000,
+    output_dir="germany_tiles"
+)
+
+# Process by bounding box
+gba_tiler.main(
+    bbox=(11.3, 48.0, 11.8, 48.3),
+    delta=0.01,
+    output_dir="munich_tiles"
+)
+```
+
+**Parameters:**
+- `bbox`: Tuple of `(lon_min, lat_min, lon_max, lat_max)` or `None`
+- `country`: Country name string or `None`
+- `iso2`: ISO 2-letter code or `None`
+- `iso3`: ISO 3-letter code or `None`
+- `delta`: Tile size in degrees (default: `0.10`)
+- `batch_size`: Features per batch (default: `1000`)
+- `output_dir`: Output directory (default: `'GBA_tiles'`)
+- `temp_dir`: Temporary directory (default: `'GBA_temp'`)
+
+**Notes:**
+- Exactly one of `bbox`, `country`, `iso2`, or `iso3` must be provided
+- Logging level is inherited from the calling program
+- If no logging is configured, `WARNING` level is used
+
 ## Output Format
 
 ### Directory Structure
@@ -348,42 +399,90 @@ All coordinates are rounded to **3 decimal places** (1mm in Web Mercator):
 - 0.001m precision is more than sufficient for buildings
 - Maintains visual quality while saving disk space
 
-## Utility Scripts
+## Example Scripts
 
-### add_bbox_to_tiles.py
+### Basic API Usage
 
-Adds bounding box metadata to existing GeoJSON tiles based on filenames.
+The repository includes `example_api.py` demonstrating programmatic usage:
 
-```bash
-python add_bbox_to_tiles.py
-```
-
-Edit script to configure:
 ```python
-INPUT_DIR = "GBA_tiles"
-OUTPUT_DIR = "GBA_tiles_with_bbox"  # or None for in-place
+#!/usr/bin/env python3
+"""Example: Using gba_tiler programmatically"""
+import logging
+import gba_tiler
+
+# Configure logging before using gba_tiler
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# Example 1: Process by country name with defaults
+gba_tiler.main(country="Luxembourg")
+
+# Example 2: Process by ISO code with custom settings
+gba_tiler.main(
+    iso2="DE",
+    delta=0.05,  # Smaller tiles
+    batch_size=2000,  # Larger batches
+    output_dir="germany_tiles"
+)
+
+# Example 3: Process by bounding box
+gba_tiler.main(
+    bbox=(11.3, 48.0, 11.8, 48.3),
+    delta=0.01,  # Very small tiles for detail
+    output_dir="munich_tiles"
+)
 ```
 
-### test_country_intersection.py
-
-Tests which tiles intersect with a country's actual borders (not just bbox).
-
+Run the example:
 ```bash
-python test_country_intersection.py
+python example_api.py
 ```
 
-Edit script to configure:
+See [example_api.py](example_api.py) for complete examples including different logging levels.
+
+### Batch Processing Multiple Countries
+
+The repository includes `example_EU_countries.py` for batch processing:
+
 ```python
-COUNTRY_NAME = "Germany"
-INPUT_DIR = "GBA_tiles"
+#!/usr/bin/env python3
+"""Example: Batch processing EU countries"""
+import csv
+import lzma
+import tarfile
+from pathlib import Path
+import gba_tiler
+
+# Process multiple countries from CSV
+with open('countries_EU.csv', newline='') as file:
+    reader = csv.DictReader(file)
+    for row in reader:
+        country = row['Country']
+        iso2 = row['ISO-Code']
+        
+        print(f"Processing: {country} ({iso2})")
+        
+        # Create tiles
+        outdir = Path(f"GBA_tiles/{iso2.lower()}")
+        gba_tiler.main(iso2=iso2, output_dir=str(outdir))
+        
+        # Compress to tar.xz
+        with lzma.open(f"GBA_tiles.{iso2.lower()}.tar.xz", 'wb') as xz:
+            with tarfile.open(fileobj=xz, mode='w') as tar:
+                tar.add(outdir, arcname=iso2.lower())
 ```
 
-Features:
-- Downloads Natural Earth country boundaries
-- Uses simplified (110m) for pre-testing
-- Uses detailed (10m) for accurate intersection
-- Caches data for speed
-- Outputs list of intersecting tiles
+This example processes all EU member states plus UK, Norway, Switzerland, and former Yugoslavia countries.
+
+Run the batch processor:
+```bash
+python example_EU_countries.py
+```
+
+The script reads from [countries_EU.csv](countries_EU.csv) and creates compressed archives for each country.
 
 ## Configuration
 

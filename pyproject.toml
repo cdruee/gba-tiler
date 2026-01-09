@@ -50,11 +50,9 @@ Repository = "https://gitlab.rlp.net/druee/gba-tiler"
 
 [project.scripts]
 gba-tiler = "gba_tiler:main"
-gba-add-bbox = "add_bbox_to_tiles:main"
-gba-test-country = "test_country_intersection:main"
 
 [tool.setuptools]
-py-modules = ["gba_tiler", "add_bbox_to_tiles", "test_country_intersection"]
+py-modules = ["gba_tiler"]
 
 [tool.setuptools_scm]
 # Don't write version file for standalone scripts

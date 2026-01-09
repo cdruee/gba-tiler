@@ -20,9 +20,9 @@ test:
     - pip install pytest flake8
   script:
     - echo "Running syntax check..."
-    - python3 -m py_compile gba_tiler.py add_bbox_to_tiles.py test_country_intersection.py
+    - python3 -m py_compile gba_tiler.py
     - echo "Running flake8..."
-    - flake8 gba_tiler.py add_bbox_to_tiles.py test_country_intersection.py --max-line-length=88 --ignore=E501,W503 || true
+    - flake8 gba_tiler.py --max-line-length=88 --ignore=E501,W503 || true
   rules:
     - if: '$CI_COMMIT_BRANCH'
       when: on_success

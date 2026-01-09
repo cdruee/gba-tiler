@@ -23,7 +23,7 @@ setup(
         "Source Code": "https://gitlab.rlp.net/druee/gba-tiler",
     },
     packages=find_packages(exclude=["tests", "tests.*"]),
-    py_modules=["gba_tiler", "add_bbox_to_tiles", "test_country_intersection"],
+    py_modules=["gba_tiler"],
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
@@ -55,8 +55,6 @@ setup(
     entry_points={
         "console_scripts": [
             "gba-tiler=gba_tiler:main",
-            "gba-add-bbox=add_bbox_to_tiles:main",
-            "gba-test-country=test_country_intersection:main",
         ],
     },
     include_package_data=True,

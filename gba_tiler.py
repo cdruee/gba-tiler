@@ -1463,7 +1463,19 @@ Examples:
 
 
 def setup_logging(verbose: bool = False, debug: bool = False):
-    """Setup logging configuration."""
+    """
+    Setup logging configuration.
+    
+    If logging is already configured (root logger has handlers),
+    this function does nothing to respect the caller's configuration.
+    """
+    root_logger = logging.getLogger()
+    
+    # If logging is already configured, don't override it
+    if root_logger.hasHandlers() and root_logger.level != logging.NOTSET:
+        return
+    
+    # Determine level
     if debug:
         level = logging.DEBUG
     elif verbose:
@@ -1477,35 +1489,83 @@ def setup_logging(verbose: bool = False, debug: bool = False):
     )
 
 
-def main():
-    """Main execution function."""
-    args = parse_args()
-    setup_logging(args.verbose, args.debug)
+def main(bbox=None, country=None, iso2=None, iso3=None, 
+         delta=0.10, batch_size=1000, 
+         output_dir='GBA_tiles', temp_dir='GBA_temp'):
+    """
+    Main execution function.
+    
+    Can be called from command line or programmatically.
+    
+    Args:
+        bbox: Tuple of (lon_min, lat_min, lon_max, lat_max) or None
+        country: Country name string or None
+        iso2: ISO 2-letter country code or None
+        iso3: ISO 3-letter country code or None
+        delta: Tile size in degrees (default: 0.10)
+        batch_size: Features per write batch (default: 1000)
+        output_dir: Output directory path (default: 'GBA_tiles')
+        temp_dir: Temporary directory path (default: 'GBA_temp')
+    
+    Note:
+        Logging level is inferred from the calling program's logging configuration.
+        If no logging is configured, WARNING level is used.
+        Exactly one of bbox, country, iso2, or iso3 must be provided.
+    
+    Example:
+        >>> main(country="Germany", delta=0.05, batch_size=2000)
+        >>> main(bbox=(5.0, 45.0, 15.0, 55.0))
+        >>> main(iso2="DE", output_dir="~/tiles")
+    """
+    # If called from command line, parse arguments
+    if bbox is None and country is None and iso2 is None and iso3 is None:
+        args = parse_args()
+        bbox = args.bbox
+        country = args.country
+        iso2 = args.iso2
+        iso3 = args.iso3
+        delta = args.delta
+        batch_size = args.batch_size
+        output_dir = args.output_dir
+        temp_dir = args.temp_dir
+        # Only set up logging if called from CLI
+        setup_logging(args.verbose, args.debug)
+    else:
+        # Called programmatically - ensure logging is configured
+        setup_logging()
+        
+        # Validate that exactly one area specification is provided
+        area_specs = sum([bbox is not None, country is not None, 
+                         iso2 is not None, iso3 is not None])
+        if area_specs == 0:
+            raise ValueError("Must specify one of: bbox, country, iso2, or iso3")
+        if area_specs > 1:
+            raise ValueError("Only one of bbox, country, iso2, or iso3 can be specified")
 
     # Set global configuration from arguments
     global DELTA, BATCH_SIZE, OUTPUT_DIR, TEMP_DIR
     global LON_MIN, LAT_MIN, LON_MAX, LAT_MAX
 
-    DELTA = args.delta
-    BATCH_SIZE = args.batch_size
-    OUTPUT_DIR = args.output_dir
-    TEMP_DIR = args.temp_dir
+    DELTA = delta
+    BATCH_SIZE = batch_size
+    OUTPUT_DIR = output_dir
+    TEMP_DIR = temp_dir
 
     # Determine area of interest
     country_geom = None
     country_name = None
-    if args.bbox:
-        LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = args.bbox
+    if bbox:
+        LON_MIN, LAT_MIN, LON_MAX, LAT_MAX = bbox
         logger.info(f"Using bounding box: {LON_MIN}°E to"
                     f" {LON_MAX}°E, {LAT_MIN}°N to {LAT_MAX}°N")
-    elif args.country or args.iso2 or args.iso3:
-        search_term = args.country or args.iso2 or args.iso3
-        if args.country:
-            result = load_country_bbox(name=args.country)
-        elif args.iso2:
-            result = load_country_bbox(iso2=args.iso2)
-        elif args.iso3:
-            result = load_country_bbox(iso3=args.iso3)
+    elif country or iso2 or iso3:
+        search_term = country or iso2 or iso3
+        if country:
+            result = load_country_bbox(name=country)
+        elif iso2:
+            result = load_country_bbox(iso2=iso2)
+        elif iso3:
+            result = load_country_bbox(iso3=iso3)
         if result is None:
             logger.critical(
                 f"Could not load boundaries for: {search_term}")
