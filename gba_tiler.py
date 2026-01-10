@@ -1232,18 +1232,21 @@ def download_country_boundary(urls: List[str], cache_file: Path
 
 def load_country_bbox(name: str | None = None,
                       iso2: str | None = None,
-                      iso3: str | None = None):
+                      iso3: str | None = None,
+                      metropolitan_only: bool = True):
     """
     Load country bounding box and geometry from Natural Earth data.
     Parameter:
         - name: Country Name
         - iso2: Country ISO two-letter code
         - iso3: Country ISO three-letter code
+        - metropolitan_only: If True, excludes overseas territories (default: True)
 
     Returns:
-        Tuple of (bbox, geometry) where:
+        Tuple of (bbox, geometry, country_name) where:
         - bbox: (min_lon, min_lat, max_lon, max_lat)
         - geometry: OGR Geometry object (Polygon or MultiPolygon)
+        - country_name: Name of the country
         Returns None if not found
     """
     if not HAS_REQUESTS or not HAS_OGR:
@@ -1261,6 +1264,28 @@ def load_country_bbox(name: str | None = None,
 
     for feature in geojson.get('features', []):
         properties = feature.get('properties', {})
+        
+        # Check if this is an overseas territory/dependency
+        # Skip if metropolitan_only=True and this is not the main territory
+        if metropolitan_only:
+            # TYPE field: 'Country', 'Dependency', 'Sovereign country', etc.
+            feature_type = properties.get('TYPE', '')
+            # For France: 'France' has TYPE='Country', but territories have TYPE='Dependency'
+            # Also check SUBUNIT vs. ADMIN - if different, it's a territory
+            subunit = properties.get('SUBUNIT', '')
+            admin = properties.get('ADMIN', '')
+            
+            # Skip dependencies and territories
+            if 'Dependency' in feature_type or 'Territory' in feature_type:
+                logger.debug(f"Skipping dependency/territory: {subunit}")
+                continue
+            
+            # For countries with multiple entries (main + territories),
+            # only process if SUBUNIT == ADMIN (main territory)
+            if subunit and admin and subunit != admin:
+                logger.debug(f"Skipping sub-territory: {subunit} (part of {admin})")
+                continue
+        
         names = [
             properties.get('NAME', ''),
             properties.get('NAME_LONG', ''),
