@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.1]  - 2025-01-11
+
+### Fixed: 
+
+- downloading way too much data to cover overseas territories
+
 ## [1.4.0]  - 2025-01-08
 
 ### Added:
