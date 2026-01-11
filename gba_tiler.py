@@ -1236,11 +1236,13 @@ def load_country_bbox(name: str | None = None,
                       metropolitan_only: bool = True):
     """
     Load country bounding box and geometry from Natural Earth data.
-    Parameter:
+    
+    Parameters:
         - name: Country Name
         - iso2: Country ISO two-letter code
         - iso3: Country ISO three-letter code
-        - metropolitan_only: If True, excludes overseas territories (default: True)
+        - metropolitan_only: If True, clips to main territory excluding distant 
+                            overseas territories (default: True)
 
     Returns:
         Tuple of (bbox, geometry, country_name) where:
@@ -1264,27 +1266,6 @@ def load_country_bbox(name: str | None = None,
 
     for feature in geojson.get('features', []):
         properties = feature.get('properties', {})
-        
-        # Check if this is an overseas territory/dependency
-        # Skip if metropolitan_only=True and this is not the main territory
-        if metropolitan_only:
-            # TYPE field: 'Country', 'Dependency', 'Sovereign country', etc.
-            feature_type = properties.get('TYPE', '')
-            # For France: 'France' has TYPE='Country', but territories have TYPE='Dependency'
-            # Also check SUBUNIT vs. ADMIN - if different, it's a territory
-            subunit = properties.get('SUBUNIT', '')
-            admin = properties.get('ADMIN', '')
-            
-            # Skip dependencies and territories
-            if 'Dependency' in feature_type or 'Territory' in feature_type:
-                logger.debug(f"Skipping dependency/territory: {subunit}")
-                continue
-            
-            # For countries with multiple entries (main + territories),
-            # only process if SUBUNIT == ADMIN (main territory)
-            if subunit and admin and subunit != admin:
-                logger.debug(f"Skipping sub-territory: {subunit} (part of {admin})")
-                continue
         
         names = [
             properties.get('NAME', ''),
@@ -1315,6 +1296,68 @@ def load_country_bbox(name: str | None = None,
 
             geom_json = json.dumps(feature['geometry'])
             geom = ogr.CreateGeometryFromJson(geom_json)
+            
+            # Clip to main territory if metropolitan_only=True
+            if metropolitan_only:
+                # Clipping bounds for countries with overseas territories
+                # Format: (min_lon, min_lat, max_lon, max_lat)
+                territory_clips = {
+                # European countries
+                'France': (-6.0, 41.0, 10.0, 52.0),           # Metropolitan France only
+                'Netherlands': (3.0, 50.5, 8.0, 54.0),        # European Netherlands
+                'Denmark': (7.5, 54.0, 16.0, 58.0),           # Mainland Denmark (no Greenland/Faroe)
+                'Spain': (-10.0, 35.0, 5.0, 44.0),            # Iberian Spain (no Canary Islands)
+                'Portugal': (-32.0, 29.5, -6.0, 43.0),        # Includes Azores & Madeira
+                'United Kingdom': (-9.0, 49.5, 2.5, 61.5),    # GB + Northern Ireland
+                'Norway': (4.0, 57.0, 32.0, 72.0),            # Includes Svalbard
+                
+                # Americas
+                'United States': (-179.0, 18.0, -66.0, 72.0),  # Continental US + Alaska + Hawaii
+                'Chile': (-76.0, -56.0, -66.0, -17.0),        # Continental Chile (no Easter Island)
+                'Ecuador': (-92.0, -5.0, -75.0, 2.0),         # Includes Galápagos
+                'Colombia': (-82.0, -5.0, -66.0, 13.0),       # Continental Colombia
+                'Venezuela': (-73.0, 0.5, -59.0, 13.0),       # Continental Venezuela
+                
+                # Asia-Pacific
+                'Australia': (112.0, -44.0, 154.0, -10.0),    # Mainland Australia (no external territories)
+                'New Zealand': (166.0, -48.0, 179.0, -34.0),  # Main islands (no Chatham, etc.)
+                'Japan': (122.0, 20.0, 146.0, 46.0),          # Main islands
+                'Indonesia': (95.0, -11.0, 141.0, 6.0),       # Main archipelago
+                'Malaysia': (99.0, 0.5, 120.0, 7.5),          # West + East Malaysia
+                'India': (68.0, 6.0, 98.0, 36.0),             # Mainland India (no Andaman/Nicobar far extent)
+                'China': (73.0, 18.0, 135.0, 54.0),           # Mainland China
+                'Philippines': (116.0, 4.0, 127.0, 21.0),     # Main islands
+                
+                # Africa
+                'South Africa': (16.0, -35.0, 33.0, -22.0),   # Mainland only (no Prince Edward Islands)
+                'Yemen': (41.0, 12.0, 54.0, 19.0),            # Mainland (no Socotra)
+                'Tanzania': (29.0, -12.0, 41.0, -1.0),        # Mainland Tanzania
+                
+                # Atlantic
+                'Kiribati': (-175.0, -12.0, -150.0, 5.0),     # Main Gilbert Islands cluster
+                }
+                
+                if country_name in territory_clips:
+                    clip_bounds = territory_clips[country_name]
+                    
+                    # Create clipping box
+                    ring = ogr.Geometry(ogr.wkbLinearRing)
+                    ring.AddPoint(clip_bounds[0], clip_bounds[1])
+                    ring.AddPoint(clip_bounds[2], clip_bounds[1])
+                    ring.AddPoint(clip_bounds[2], clip_bounds[3])
+                    ring.AddPoint(clip_bounds[0], clip_bounds[3])
+                    ring.AddPoint(clip_bounds[0], clip_bounds[1])
+                    clip_box = ogr.Geometry(ogr.wkbPolygon)
+                    clip_box.AddGeometry(ring)
+                    
+                    # Clip geometry
+                    clipped = geom.Intersection(clip_box)
+                    
+                    if clipped and not clipped.IsEmpty():
+                        geom = clipped
+                        logger.info(f"Clipped to main territory of {country_name}")
+                    else:
+                        logger.warning(f"Clipping failed for {country_name}, using full geometry")
 
             envelope = geom.GetEnvelope()
             # OGR envelope is (minX, maxX, minY, maxY)
