@@ -75,6 +75,10 @@ except ImportError:
 # Earth radius for Web Mercator projection
 EARTH_RADIUS = 6378137.0  # meters
 
+# File size indicator divider
+SIZE_UNIT = 1024 # KB
+
+
 # Natural Earth Data URLs for country boundaries
 CACHE_DIR = ".country_borders_cache"
 DETAILED_COUNTRY_URLS = [
@@ -138,7 +142,7 @@ OUTPUT_DIR = "GBA_tiles"
 TEMP_DIR = "GBA_temp"
 
 # Memory optimization: batch size for writing features
-BATCH_SIZE = 1000  # Minimum 1, recommended 50-1000
+BATCH_SIZE = 10000  # Minimum 1, recommended 50-100000
 
 
 # ----------------------------------------------------------------------------
@@ -776,88 +780,12 @@ def append_features_to_file(output_path: Path, features: List[dict],
             json.dump(data, f)
 
 
-def estimate_feature_count(input_file: Path) -> int:
-    """
-    Estimate the number of features in a GeoJSON file by sampling.
-
-    Reads a small sample of features, measures their average size in bytes,
-    and extrapolates to estimate the total feature count.
-
-    Args:
-        input_file: Path to input GeoJSON file
-
-    Returns:
-        Estimated number of features (or 0 if estimation fails)
-    """
-    try:
-        file_size = input_file.stat().st_size
-
-        MORE = 1000
-
-        with open(input_file, 'rb') as f:
-            # Read first 5 features and get position
-            features_sample1 = []
-            parser1 = ijson.items(f, 'features.item', use_float=True)
-
-            for i, feature in enumerate(parser1):
-                if i >= 5:
-                    break
-                features_sample1.append(feature)
-
-            if len(features_sample1) < 5:
-                # File has fewer than 5 features, count exactly
-                return len(features_sample1)
-
-            pos_after_5 = f.tell()
-
-            # Read next 10 features and get position
-            features_sample2 = []
-            for i, feature in enumerate(parser1):
-                if i >= MORE:
-                    break
-                features_sample2.append(feature)
-
-            if len(features_sample2) < MORE:
-                # File has fewer than 15 features total
-                return len(features_sample1) + len(features_sample2)
-
-            pos_after_more = f.tell()
-
-        # Calculate average bytes per feature from the second sample
-        # (more accurate)
-        bytes_for_more_features = pos_after_more - pos_after_5
-        avg_bytes_per_feature = bytes_for_more_features / MORE
-
-        # Estimate header size (everything before first feature)
-        # This includes: {"type":"FeatureCollection","features":[
-        # We use position after 5 features and subtract 5 * avg size
-        estimated_header_size = pos_after_5 - (5 * avg_bytes_per_feature)
-
-        # Estimate footer size (closing brackets and braces)
-        # Typically just: ]} which is about 10-50 bytes, we'll estimate 50
-        estimated_footer_size = 50
-
-        # Calculate bytes available for features
-        bytes_for_features = (file_size - estimated_header_size
-                              - estimated_footer_size)
-
-        # Estimate total features
-        estimated_features = int(
-            bytes_for_features / avg_bytes_per_feature)
-
-        # At least 15 since we read that many
-        return max(estimated_features, 15)
-
-    except Exception as e:
-        logger.warning(
-            f"  ! Warning: Could not estimate feature count: {e}")
-        return 0
-
-
 def split_input_tile(input_file: Path,
                      output_tiles: List[Tuple[float, float, float, float]],
                      output_dir: Path,
-                     tiles_written: Dict[str, int]):
+                     tiles_written: Dict[str, int],
+                     input_count: int | None = None,
+                     input_total: int|None = None):
     """
     Split input tile into multiple output tiles using streaming JSON parsing.
 
@@ -890,9 +818,14 @@ def split_input_tile(input_file: Path,
         return
 
     # Estimate feature count for progress reporting
-    estimated_count = estimate_feature_count(input_file)
-    if estimated_count > 0:
-        logger.info(f"  Estimated features: ~{estimated_count:,}")
+    estimated_count = os.path.getsize(input_file)
+    if input_count:
+        if input_total:
+            count_str = f"{input_count:2d}/{input_total:2d}"
+        else:
+            count_str = f"file #{input_count:2i}"
+    else:
+        count_str = "  "
 
     # Pre-convert tile bounds to Mercator bounding
     # boxes for fast intersection tests
@@ -957,6 +890,7 @@ def split_input_tile(input_file: Path,
     # Ensure BATCH_SIZE is at least 1
     batch_size = max(1, BATCH_SIZE)
 
+
     try:
         # Stream parse the JSON file
         with open(input_file, 'rb') as f:
@@ -965,11 +899,11 @@ def split_input_tile(input_file: Path,
 
             # Use tqdm if available
             if HAS_TQDM and estimated_count > 0:
-                features = tqdm(features, total=estimated_count,
-                                desc="  Processing")
-
+                bar = tqdm(total=int(estimated_count / SIZE_UNIT),
+                           desc=f"  Processing ({count_str})")
             for feature in features:
                 features_processed += 1
+                bar.update(int(f.tell()/SIZE_UNIT) - bar.n)
 
                 # Get bbox center for this feature
                 geometry = feature.get('geometry', {})
@@ -1701,9 +1635,11 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
 
     tiles_written = {}  # Track feature counts per output tile
 
-    for input_file in downloaded_files:
+    for i, input_file in enumerate(downloaded_files):
         split_input_tile(input_file, output_tiles, output_dir,
-                         tiles_written)
+                         tiles_written,
+                         input_count=i+1,
+                         input_total=len(downloaded_files))
 
     # Summary
     logger.info("=" * 50)
