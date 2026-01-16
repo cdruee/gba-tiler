@@ -1,6 +1,24 @@
 # Changelog
 
-## [1.4.1]  - 2025-01-11
+
+## [1.5.1]  - 2026-01-16
+
+### Fixed:
+
+- updated documentation
+
+## [1.5.0]  - 2026-01-16
+
+### Added:
+
+- option -1/--sequential to process sequentially
+- option -q/--quiet to reduce logging output
+
+### Changed:
+
+- Parallel processing by default
+
+## [1.4.1]  - 2026-01-11
 
 ### Fixed: 
 
