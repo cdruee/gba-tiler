@@ -1745,9 +1745,11 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         
         # Initialize progress for each file
         file_sizes = {}
+        file_order = []  # Preserve original order
         for i, input_file in enumerate(downloaded_files):
             file_size = input_file.stat().st_size
             file_sizes[input_file.name] = file_size
+            file_order.append(input_file.name)
             progress_dict[input_file.name] = {'bytes': 0, 'total': file_size}
         
         # Start progress monitoring thread
@@ -1761,9 +1763,9 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
                 if stop_monitoring.is_set():
                     break
                     
-                # Collect progress from all files
+                # Collect progress from all files in original order
                 progress_parts = []
-                for filename in sorted(progress_dict.keys()):
+                for filename in file_order:
                     info = progress_dict[filename]
                     total = info['total']
                     current = info['bytes']
