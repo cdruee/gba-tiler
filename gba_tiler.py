@@ -29,6 +29,7 @@ import io
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 import fcntl  # For file locking on Unix
+import time
 
 # Version detection - works both installed and standalone
 try:
@@ -53,13 +54,6 @@ except ImportError:
 from decimal import Decimal
 
 try:
-    from tqdm import tqdm
-
-    HAS_TQDM = True
-except ImportError:
-    HAS_TQDM = False
-
-try:
     import requests
 
     HAS_REQUESTS = True
@@ -79,7 +73,7 @@ except ImportError:
 EARTH_RADIUS = 6378137.0  # meters
 
 # File size indicator divider
-SIZE_UNIT = 1024  # KB
+SIZE_UNIT = 1024 # KB
 
 
 # Natural Earth Data URLs for country boundaries
@@ -613,34 +607,26 @@ def download_input_tile(filename: str, temp_dir: Path,
                 env=env
             )
 
-            # Determine if we should show progress bars
-            current_level = logger.getEffectiveLevel()
-            show_progress = (HAS_TQDM and 
-                           current_level in (logging.WARNING, logging.INFO))
-
-            bar = None
+            # Track progress for logging
+            last_percent = 0
             for line in rsync.stdout:
-                if not show_progress or current_level == logging.DEBUG:
-                    # In DEBUG or quiet mode, just print the line
+                if logger.getEffectiveLevel() == logging.DEBUG:
+                    # In DEBUG mode, print all rsync output
                     print(line, end='')
-                else:
-                    if "%" in line:
-                        if not bar:
-                            bar = tqdm(total=100,
-                                       desc=f"{filename} ({region:12s})",
-                                       unit="%",
-                                       position=file_num,
-                                       leave=True)
-                        try:
-                            parts = line.split()
-                            if len(parts) > 2:
-                                perc = float(line.split()[1].rstrip("%"))
-                        except (IndexError, ValueError):
-                            pass
-                        bar.update(perc - bar.n)
+                elif "%" in line:
+                    # Parse progress percentage
+                    try:
+                        parts = line.split()
+                        if len(parts) > 2:
+                            perc = int(float(parts[1].rstrip("%")))
+                            # Log every 10% or at completion
+                            if perc >= last_percent + 10 or perc >= 100:
+                                logger.info(f"  Downloading {filename} from {region}: {perc}%")
+                                last_percent = perc
+                    except (IndexError, ValueError):
+                        pass
+            
             rsync.wait()
-            if bar:
-                bar.close()
 
             if rsync.returncode == 0:
                 logger.info(
@@ -804,13 +790,29 @@ def append_features_to_file(output_path: Path, features: List[dict],
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
+def split_input_tile_parallel(input_file: Path,
+                             output_tiles: List[Tuple[float, float, float, float]],
+                             output_dir: Path,
+                             tiles_written: Dict[str, int],
+                             progress_dict: Dict,
+                             input_count: int | None = None,
+                             input_total: int | None = None):
+    """
+    Split input tile - parallel version with progress tracking.
+    
+    Same as split_input_tile but updates shared progress_dict.
+    """
+    # Call the regular function but with progress updates
+    _split_input_tile_impl(input_file, output_tiles, output_dir, tiles_written,
+                          input_count, input_total, progress_dict)
+
+
 def split_input_tile(input_file: Path,
                      output_tiles: List[Tuple[float, float, float, float]],
                      output_dir: Path,
                      tiles_written: Dict[str, int],
-                     show_progress: bool = True,
                      input_count: int | None = None,
-                     input_total: int|None = None):
+                     input_total: int | None = None):
     """
     Split input tile into multiple output tiles using streaming JSON parsing.
 
@@ -820,11 +822,31 @@ def split_input_tile(input_file: Path,
         output_dir: Directory to save output tiles
         tiles_written: Dictionary tracking feature counts per tile
     """
-    msg = f"\n  Processing {input_file.name}..."
-    if show_progress:
-        tqdm.write(msg)
-    else:
-        logger.info(msg)
+    # Call implementation without progress tracking
+    _split_input_tile_impl(input_file, output_tiles, output_dir, tiles_written,
+                          input_count, input_total, None)
+
+
+def _split_input_tile_impl(input_file: Path,
+                           output_tiles: List[Tuple[float, float, float, float]],
+                           output_dir: Path,
+                           tiles_written: Dict[str, int],
+                           input_count: int | None = None,
+                           input_total: int | None = None,
+                           progress_dict: Dict | None = None):
+    """
+    Implementation of split_input_tile with optional progress tracking.
+    
+    Args:
+        input_file: Path to input GeoJSON file
+        output_tiles: List of output tile bounds (WGS84)
+        output_dir: Directory to save output tiles
+        tiles_written: Dictionary tracking feature counts per tile
+        input_count: Current file number (for logging)
+        input_total: Total number of files (for logging)
+        progress_dict: Optional shared dict for progress tracking (parallel mode)
+    """
+    # logger.info(f"\n  Processing {input_file.name}...")
     
     # Validate file before processing
     try:
@@ -862,11 +884,7 @@ def split_input_tile(input_file: Path,
     tile_bboxes_merc = {}
     tile_files = {}
 
-    msg = f"  Converting {len(output_tiles)} tiles to Mercator..."
-    if show_progress:
-        tqdm.write(msg)
-    else:
-        logger.info(msg)
+    # logger.info(f"  Converting {len(output_tiles)} tiles to Mercator...")
 
     # Build spatial index: grid cells that point to tiles
     # This avoids checking all 10k tiles for each feature
@@ -909,11 +927,8 @@ def split_input_tile(input_file: Path,
             left_lon, upper_lat, right_lon, lower_lat)
         tile_files[bounds] = output_dir / filename
 
-    msg = f"  Built spatial index with {len(spatial_index)} grid cells"
-    if show_progress:
-        tqdm.write(msg)
-    else:
-        logger.info(msg)
+    # logger.info(
+    #     f"  Built spatial index with {len(spatial_index)} grid cells")
 
     # Temporary storage for batched writes
     batch_buffers = {bounds: [] for bounds in output_tiles}
@@ -921,12 +936,7 @@ def split_input_tile(input_file: Path,
     features_with_coords = 0
     features_with_valid_bbox = 0
 
-    msg = f"  Streaming features from file..."
-    if show_progress:
-        tqdm.write(msg)
-    else:
-        logger.info(msg)
-
+    #logger.info(f"  Streaming features from file...")
 
     # Ensure BATCH_SIZE is at least 1
     batch_size = max(1, BATCH_SIZE)
@@ -938,22 +948,35 @@ def split_input_tile(input_file: Path,
             # Parse features array items one at a time
             features = ijson.items(f, 'features.item', use_float=True)
 
-            # Use tqdm if appropriate
-            if show_progress and estimated_count > 0:
-                # Use input_count for position so bars don't overlap
-                pos = input_count if input_count else 1
-                bar = tqdm(total=int(estimated_count / SIZE_UNIT),
-                           desc=f"  Processing ({count_str})",
-                           position=pos,
-                           leave=True,
-                           unit='MB')
-            else:
-                bar = None
+            # Track progress for periodic logging
+            last_percent = 0
+            last_log_time = 0
+            start_time = time.time()
                 
             for feature in features:
                 features_processed += 1
-                if bar:
-                    bar.update(int(f.tell()/SIZE_UNIT) - bar.n)
+                
+                # Update progress
+                if estimated_count > 0:
+                    current_pos = f.tell()
+                    percent = int((current_pos / estimated_count) * 100)
+                    current_time = time.time()
+                    
+                    # Update shared progress dict for parallel mode
+                    if progress_dict is not None:
+                        progress_dict[input_file.name] = {
+                            'bytes': current_pos,
+                            'total': estimated_count
+                        }
+                    
+                    # Log progress periodically in sequential mode (every 10% or every 10 seconds)
+                    if progress_dict is None:  # Sequential mode only
+                        if (percent >= last_percent + 10 or 
+                            current_time - last_log_time >= 10):
+                            size_mb = current_pos / (1024**2)
+                            logger.info(f"  Processing ({count_str}): {percent}% [{size_mb:.1f} MB]")
+                            last_percent = percent
+                            last_log_time = current_time
 
                 # Get bbox center for this feature
                 geometry = feature.get('geometry', {})
@@ -966,11 +989,7 @@ def split_input_tile(input_file: Path,
                 bbox_center = get_bbox_center(coordinates)
                 if not bbox_center:
                     if features_processed <= 3:
-                        msg = f"    Feature {features_processed}: INVALID BBOX CENTER"
-                        if bar:
-                            tqdm.write(msg)
-                        else:
-                            logger.error(msg)
+                        logger.error(f"    Feature {features_processed}: INVALID BBOX CENTER")
                     continue
 
                 features_with_valid_bbox += 1
@@ -979,15 +998,8 @@ def split_input_tile(input_file: Path,
 
                 # Debug: Print first few features
                 if features_processed <= 3:
-                    msg1 = (f"    Feature {features_processed}: bbox"
-                            f" center=({center_x:.0f}, {center_y:.0f})")
-                    msg2 = f"      Geometry type: {geometry.get('type')}"
-                    if show_progress:
-                        tqdm.write(msg1)
-                        tqdm.write(msg2)
-                    else:
-                        logger.debug(msg1)
-                        logger.debug(msg2)
+                    logger.debug(f"    Feature {features_processed}: bbox center=({center_x:.0f}, {center_y:.0f})")
+                    logger.debug(f"      Geometry type: {geometry.get('type')}")
 
                 # Use spatial index to find candidate tiles
                 # (single grid cell for point)
@@ -999,11 +1011,7 @@ def split_input_tile(input_file: Path,
 
                 # Debug: Print candidate count for first few features
                 if features_processed <= 3:
-                    msg = f"      Found {len(candidate_tiles)} candidate tiles"
-                    if show_progress:
-                        tqdm.write(msg)
-                    else:
-                        logger.debug(msg)
+                    logger.debug(f"      Found {len(candidate_tiles)} candidate tiles")
 
                 # Find THE tile this feature belongs to (should be exactly one)
                 matched_tile = None
@@ -1018,17 +1026,9 @@ def split_input_tile(input_file: Path,
 
                     # Debug: Print match for first few features
                     if features_processed <= 3:
-                        msg = f"      Matched tile: {matched_tile}"
-                        if show_progress:
-                            tqdm.write(msg)
-                        else:
-                            logger.debug(msg)
+                        logger.debug(f"      Matched tile: {matched_tile}")
                 elif features_processed < 1:
-                    msg = f"      WARNING: No features inside output tile!"
-                    if show_progress:
-                        tqdm.write(msg)
-                    else:
-                        logger.warning(msg)
+                    logger.warning(f"      WARNING: No features inside output tile!")
 
                 # Flush batches when they get large enough
                 for tile_bounds in list(batch_buffers.keys()):
@@ -1045,13 +1045,8 @@ def split_input_tile(input_file: Path,
                         # Clear batch
                         batch_buffers[tile_bounds] = []
 
-        # Close progress bar
-        if bar:
-            bar.close()
-
-        if not bar:
-            logger.info(f"  Processed: {features_processed:,}"
-                        f" features (complete)")
+        # Log final completion
+        logger.info(f"  Processing ({count_str}): 100% - Complete")
 
         logger.info(f"  Statistics:")
         logger.info(
@@ -1504,7 +1499,14 @@ Examples:
     log_group.add_argument(
         '-q', '--quiet',
         action='store_true',
-        help='Quiet mode - errors only (ERROR level, disables progress bars)'
+        help='Quiet mode - errors only (ERROR level)'
+    )
+    
+    # Processing mode
+    parser.add_argument(
+        '-1', '--sequential',
+        action='store_true',
+        help='Process files sequentially instead of in parallel (slower but shows detailed progress)'
     )
 
     # Optional parameters
@@ -1571,7 +1573,8 @@ def setup_logging(verbose: bool = False, debug: bool = False, quiet: bool = Fals
 
 def main(bbox=None, country=None, iso2=None, iso3=None, 
          delta=0.10, batch_size=1000, 
-         output_dir='GBA_tiles', temp_dir='GBA_temp'):
+         output_dir='GBA_tiles', temp_dir='GBA_temp',
+         sequential=False):
     """
     Main execution function.
     
@@ -1586,6 +1589,7 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         batch_size: Features per write batch (default: 1000)
         output_dir: Output directory path (default: 'GBA_tiles')
         temp_dir: Temporary directory path (default: 'GBA_temp')
+        sequential: Process files sequentially instead of in parallel (default: False)
     
     Note:
         Logging level is inferred from the calling program's logging configuration.
@@ -1595,7 +1599,7 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
     Example:
         >>> main(country="Germany", delta=0.05, batch_size=2000)
         >>> main(bbox=(5.0, 45.0, 15.0, 55.0))
-        >>> main(iso2="DE", output_dir="~/tiles")
+        >>> main(iso2="DE", output_dir="~/tiles", sequential=True)
     """
     # If called from command line, parse arguments
     if bbox is None and country is None and iso2 is None and iso3 is None:
@@ -1606,6 +1610,7 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         iso3 = args.iso3
         delta = args.delta
         batch_size = args.batch_size
+        sequential = args.sequential
         output_dir = args.output_dir
         temp_dir = args.temp_dir
         # Only set up logging if called from CLI
@@ -1689,13 +1694,6 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
     else:
         logger.info(f"Will create up to {total_output_tiles} output tile(s)")
 
-    # Determine if we should show progress bars
-    # Show bars for WARNING and INFO levels only
-    # Disable for DEBUG (too verbose) and ERROR (quiet mode)
-    current_level = logger.getEffectiveLevel()
-    show_progress = (HAS_TQDM and
-                     current_level in (logging.WARNING, logging.INFO))
-
     # Download input tiles
     logger.info("Step 3: Downloading input tiles...")
     downloaded_files = []
@@ -1721,37 +1719,82 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
     tiles_written = {}  # Track feature counts per output tile
     
     # Determine number of worker processes
-    # Use CPU count - 1 to leave one core for system, minimum 1
     num_workers = max(1, multiprocessing.cpu_count() - 1)
-    logger.info(f"Using {num_workers} parallel worker(s)")
     
-    if len(downloaded_files) == 1 or num_workers == 1:
-        # Sequential processing for single file or single CPU
+    # Decide on parallel vs sequential processing based on --sequential flag
+    if sequential or len(downloaded_files) == 1 or num_workers == 1:
+        logger.info(f"Sequential processing - {len(downloaded_files)} file(s)")
+        use_parallel = False
+    else:
+        logger.info(f"Parallel processing - {num_workers} workers for {len(downloaded_files)} files")
+        use_parallel = True
+    
+    if not use_parallel:
+        # Sequential processing - detailed progress logging per file
         for i, input_file in enumerate(downloaded_files):
             split_input_tile(input_file, output_tiles, output_dir,
                              tiles_written,
                              input_count=i+1,
                              input_total=len(downloaded_files))
     else:
-        print("\n"*len(downloaded_files))
-        # Parallel processing for multiple files
-        with ProcessPoolExecutor(max_workers=num_workers,
-                                 initializer=tqdm.set_lock,
-                                 initargs=(tqdm.get_lock(),)) as executor:
+        # Parallel processing - periodic combined progress
+        # Create shared progress tracking
+        from multiprocessing import Manager
+        manager = Manager()
+        progress_dict = manager.dict()  # Shared dict for progress tracking
+        
+        # Initialize progress for each file
+        file_sizes = {}
+        for i, input_file in enumerate(downloaded_files):
+            file_size = input_file.stat().st_size
+            file_sizes[input_file.name] = file_size
+            progress_dict[input_file.name] = {'bytes': 0, 'total': file_size}
+        
+        # Start progress monitoring thread
+        import threading
+        stop_monitoring = threading.Event()
+        
+        def monitor_progress():
+            """Monitor and log combined progress every 10 seconds"""
+            while not stop_monitoring.is_set():
+                time.sleep(10)
+                if stop_monitoring.is_set():
+                    break
+                    
+                # Collect progress from all files
+                progress_parts = []
+                for filename in sorted(progress_dict.keys()):
+                    info = progress_dict[filename]
+                    total = info['total']
+                    current = info['bytes']
+                    if total > 0:
+                        percent = int((current / total) * 100)
+                        size_mb = current / (1024**2)
+                        progress_parts.append(f"{percent:3d}% [{size_mb:6.1f}MB]")
+                    else:
+                        progress_parts.append("  0% [  0.0MB]")
+                
+                if progress_parts:
+                    logger.info(f"Processing: {' '.join(progress_parts)}")
+        
+        monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
+        monitor_thread.start()
+        
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
             # Submit all tasks
             futures = {}
             for i, input_file in enumerate(downloaded_files):
                 # Each worker gets its own tiles_written dict
                 worker_tiles_written = {}
                 future = executor.submit(
-                    split_input_tile,
+                    split_input_tile_parallel,
                     input_file,
                     output_tiles,
                     output_dir,
                     worker_tiles_written,
-                    show_progress=show_progress,
-                    input_count=i + 1,
-                    input_total=len(downloaded_files)
+                    progress_dict,
+                    i + 1,
+                    len(downloaded_files)
                 )
                 futures[future] = (input_file, worker_tiles_written)
             
@@ -1763,8 +1806,13 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
                     # Merge worker results into main tiles_written
                     for filename, count in worker_tiles_written.items():
                         tiles_written[filename] = tiles_written.get(filename, 0) + count
+                    logger.info(f"  ✓ Completed {input_file.name}")
                 except Exception as e:
                     logger.error(f"Error processing {input_file.name}: {e}")
+        
+        # Stop monitoring thread
+        stop_monitoring.set()
+        monitor_thread.join(timeout=1)
 
 
     # Summary
