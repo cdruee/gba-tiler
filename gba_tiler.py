@@ -79,7 +79,7 @@ except ImportError:
 EARTH_RADIUS = 6378137.0  # meters
 
 # File size indicator divider
-SIZE_UNIT = 1024 # KB
+SIZE_UNIT = 1024  # KB
 
 
 # Natural Earth Data URLs for country boundaries
