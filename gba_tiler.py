@@ -26,6 +26,9 @@ import argparse
 import logging
 import zipfile
 import io
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
+import fcntl  # For file locking on Unix
 
 # Version detection - works both installed and standalone
 try:
@@ -610,16 +613,24 @@ def download_input_tile(filename: str, temp_dir: Path,
                 env=env
             )
 
+            # Determine if we should show progress bars
+            current_level = logger.getEffectiveLevel()
+            show_progress = (HAS_TQDM and 
+                           current_level in (logging.WARNING, logging.INFO))
+
             bar = None
             for line in rsync.stdout:
-                if logger.getEffectiveLevel() == logging.DEBUG:
-                    print (line)
+                if not show_progress or current_level == logging.DEBUG:
+                    # In DEBUG or quiet mode, just print the line
+                    print(line, end='')
                 else:
                     if "%" in line:
                         if not bar:
                             bar = tqdm(total=100,
                                        desc=f"{filename} ({region:12s})",
-                                       unit="%")
+                                       unit="%",
+                                       position=file_num,
+                                       leave=True)
                         try:
                             parts = line.split()
                             if len(parts) > 2:
@@ -628,7 +639,8 @@ def download_input_tile(filename: str, temp_dir: Path,
                             pass
                         bar.update(perc - bar.n)
             rsync.wait()
-            if bar: del(bar)
+            if bar:
+                bar.close()
 
             if rsync.returncode == 0:
                 logger.info(
@@ -769,21 +781,34 @@ def append_features_to_file(output_path: Path, features: List[dict],
             ]
 
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+            # Acquire exclusive lock
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                json.dump(data, f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     else:
         # Read and append - we must load existing features
         # This is unavoidable for valid GeoJSON format
-        with open(output_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        data['features'].extend(features_rounded)
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        with open(output_path, 'r+', encoding='utf-8') as f:
+            # Acquire exclusive lock
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                data = json.load(f)
+                data['features'].extend(features_rounded)
+                f.seek(0)
+                f.truncate()
+                json.dump(data, f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def split_input_tile(input_file: Path,
                      output_tiles: List[Tuple[float, float, float, float]],
                      output_dir: Path,
                      tiles_written: Dict[str, int],
+                     show_progress: bool = True,
                      input_count: int | None = None,
                      input_total: int|None = None):
     """
@@ -795,7 +820,11 @@ def split_input_tile(input_file: Path,
         output_dir: Directory to save output tiles
         tiles_written: Dictionary tracking feature counts per tile
     """
-    logger.info(f"\n  Processing {input_file.name}...")
+    msg = f"\n  Processing {input_file.name}..."
+    if show_progress:
+        tqdm.write(msg)
+    else:
+        logger.info(msg)
     
     # Validate file before processing
     try:
@@ -833,7 +862,11 @@ def split_input_tile(input_file: Path,
     tile_bboxes_merc = {}
     tile_files = {}
 
-    logger.info(f"  Converting {len(output_tiles)} tiles to Mercator...")
+    msg = f"  Converting {len(output_tiles)} tiles to Mercator..."
+    if show_progress:
+        tqdm.write(msg)
+    else:
+        logger.info(msg)
 
     # Build spatial index: grid cells that point to tiles
     # This avoids checking all 10k tiles for each feature
@@ -876,8 +909,11 @@ def split_input_tile(input_file: Path,
             left_lon, upper_lat, right_lon, lower_lat)
         tile_files[bounds] = output_dir / filename
 
-    logger.info(
-        f"  Built spatial index with {len(spatial_index)} grid cells")
+    msg = f"  Built spatial index with {len(spatial_index)} grid cells"
+    if show_progress:
+        tqdm.write(msg)
+    else:
+        logger.info(msg)
 
     # Temporary storage for batched writes
     batch_buffers = {bounds: [] for bounds in output_tiles}
@@ -885,7 +921,12 @@ def split_input_tile(input_file: Path,
     features_with_coords = 0
     features_with_valid_bbox = 0
 
-    logger.info(f"  Streaming features from file...")
+    msg = f"  Streaming features from file..."
+    if show_progress:
+        tqdm.write(msg)
+    else:
+        logger.info(msg)
+
 
     # Ensure BATCH_SIZE is at least 1
     batch_size = max(1, BATCH_SIZE)
@@ -897,13 +938,22 @@ def split_input_tile(input_file: Path,
             # Parse features array items one at a time
             features = ijson.items(f, 'features.item', use_float=True)
 
-            # Use tqdm if available
-            if HAS_TQDM and estimated_count > 0:
+            # Use tqdm if appropriate
+            if show_progress and estimated_count > 0:
+                # Use input_count for position so bars don't overlap
+                pos = input_count if input_count else 1
                 bar = tqdm(total=int(estimated_count / SIZE_UNIT),
-                           desc=f"  Processing ({count_str})")
+                           desc=f"  Processing ({count_str})",
+                           position=pos,
+                           leave=True,
+                           unit='MB')
+            else:
+                bar = None
+                
             for feature in features:
                 features_processed += 1
-                bar.update(int(f.tell()/SIZE_UNIT) - bar.n)
+                if bar:
+                    bar.update(int(f.tell()/SIZE_UNIT) - bar.n)
 
                 # Get bbox center for this feature
                 geometry = feature.get('geometry', {})
@@ -916,8 +966,11 @@ def split_input_tile(input_file: Path,
                 bbox_center = get_bbox_center(coordinates)
                 if not bbox_center:
                     if features_processed <= 3:
-                        logger.error(f"    Feature {features_processed}:"
-                                     f" INVALID BBOX CENTER")
+                        msg = f"    Feature {features_processed}: INVALID BBOX CENTER"
+                        if bar:
+                            tqdm.write(msg)
+                        else:
+                            logger.error(msg)
                     continue
 
                 features_with_valid_bbox += 1
@@ -926,11 +979,15 @@ def split_input_tile(input_file: Path,
 
                 # Debug: Print first few features
                 if features_processed <= 3:
-                    logger.debug(f"    Feature {features_processed}: "
-                                 f"bbox center=({center_x:.0f}, "
-                                 f"{center_y:.0f})")
-                    logger.debug(f"      Geometry type: "
-                                 f"{geometry.get('type')}")
+                    msg1 = (f"    Feature {features_processed}: bbox"
+                            f" center=({center_x:.0f}, {center_y:.0f})")
+                    msg2 = f"      Geometry type: {geometry.get('type')}"
+                    if show_progress:
+                        tqdm.write(msg1)
+                        tqdm.write(msg2)
+                    else:
+                        logger.debug(msg1)
+                        logger.debug(msg2)
 
                 # Use spatial index to find candidate tiles
                 # (single grid cell for point)
@@ -942,8 +999,11 @@ def split_input_tile(input_file: Path,
 
                 # Debug: Print candidate count for first few features
                 if features_processed <= 3:
-                    logger.debug(f"      Found {len(candidate_tiles)}"
-                                 f" candidate tiles")
+                    msg = f"      Found {len(candidate_tiles)} candidate tiles"
+                    if show_progress:
+                        tqdm.write(msg)
+                    else:
+                        logger.debug(msg)
 
                 # Find THE tile this feature belongs to (should be exactly one)
                 matched_tile = None
@@ -958,10 +1018,17 @@ def split_input_tile(input_file: Path,
 
                     # Debug: Print match for first few features
                     if features_processed <= 3:
-                        logger.debug(f"      Matched tile: {matched_tile}")
+                        msg = f"      Matched tile: {matched_tile}"
+                        if show_progress:
+                            tqdm.write(msg)
+                        else:
+                            logger.debug(msg)
                 elif features_processed < 1:
-                    logger.warning(
-                        f"      WARNING: No features instide output tile!")
+                    msg = f"      WARNING: No features inside output tile!"
+                    if show_progress:
+                        tqdm.write(msg)
+                    else:
+                        logger.warning(msg)
 
                 # Flush batches when they get large enough
                 for tile_bounds in list(batch_buffers.keys()):
@@ -978,7 +1045,11 @@ def split_input_tile(input_file: Path,
                         # Clear batch
                         batch_buffers[tile_bounds] = []
 
-        if not HAS_TQDM:
+        # Close progress bar
+        if bar:
+            bar.close()
+
+        if not bar:
             logger.info(f"  Processed: {features_processed:,}"
                         f" features (complete)")
 
@@ -1428,7 +1499,12 @@ Examples:
     log_group.add_argument(
         '--debug',
         action='store_true',
-        help='Enable debug output (DEBUG level)'
+        help='Enable debug output (DEBUG level, disables progress bars)'
+    )
+    log_group.add_argument(
+        '-q', '--quiet',
+        action='store_true',
+        help='Quiet mode - errors only (ERROR level, disables progress bars)'
     )
 
     # Optional parameters
@@ -1464,7 +1540,7 @@ Examples:
     return parser.parse_args()
 
 
-def setup_logging(verbose: bool = False, debug: bool = False):
+def setup_logging(verbose: bool = False, debug: bool = False, quiet: bool = False):
     """
     Setup logging configuration.
     
@@ -1480,6 +1556,8 @@ def setup_logging(verbose: bool = False, debug: bool = False):
     # Determine level
     if debug:
         level = logging.DEBUG
+    elif quiet:
+        level = logging.ERROR
     elif verbose:
         level = logging.INFO
     else:
@@ -1531,7 +1609,7 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         output_dir = args.output_dir
         temp_dir = args.temp_dir
         # Only set up logging if called from CLI
-        setup_logging(args.verbose, args.debug)
+        setup_logging(args.verbose, args.debug, args.quiet)
     else:
         # Called programmatically - ensure logging is configured
         setup_logging()
@@ -1611,6 +1689,13 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
     else:
         logger.info(f"Will create up to {total_output_tiles} output tile(s)")
 
+    # Determine if we should show progress bars
+    # Show bars for WARNING and INFO levels only
+    # Disable for DEBUG (too verbose) and ERROR (quiet mode)
+    current_level = logger.getEffectiveLevel()
+    show_progress = (HAS_TQDM and
+                     current_level in (logging.WARNING, logging.INFO))
+
     # Download input tiles
     logger.info("Step 3: Downloading input tiles...")
     downloaded_files = []
@@ -1634,12 +1719,53 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
                 f" using streaming...")
 
     tiles_written = {}  # Track feature counts per output tile
+    
+    # Determine number of worker processes
+    # Use CPU count - 1 to leave one core for system, minimum 1
+    num_workers = max(1, multiprocessing.cpu_count() - 1)
+    logger.info(f"Using {num_workers} parallel worker(s)")
+    
+    if len(downloaded_files) == 1 or num_workers == 1:
+        # Sequential processing for single file or single CPU
+        for i, input_file in enumerate(downloaded_files):
+            split_input_tile(input_file, output_tiles, output_dir,
+                             tiles_written,
+                             input_count=i+1,
+                             input_total=len(downloaded_files))
+    else:
+        print("\n"*len(downloaded_files))
+        # Parallel processing for multiple files
+        with ProcessPoolExecutor(max_workers=num_workers,
+                                 initializer=tqdm.set_lock,
+                                 initargs=(tqdm.get_lock(),)) as executor:
+            # Submit all tasks
+            futures = {}
+            for i, input_file in enumerate(downloaded_files):
+                # Each worker gets its own tiles_written dict
+                worker_tiles_written = {}
+                future = executor.submit(
+                    split_input_tile,
+                    input_file,
+                    output_tiles,
+                    output_dir,
+                    worker_tiles_written,
+                    show_progress=show_progress,
+                    input_count=i + 1,
+                    input_total=len(downloaded_files)
+                )
+                futures[future] = (input_file, worker_tiles_written)
+            
+            # Collect results as they complete
+            for future in as_completed(futures):
+                input_file, worker_tiles_written = futures[future]
+                try:
+                    future.result()  # Check for exceptions
+                    # Merge worker results into main tiles_written
+                    for filename, count in worker_tiles_written.items():
+                        tiles_written[filename] = tiles_written.get(filename, 0) + count
+                except Exception as e:
+                    logger.error(f"Error processing {input_file.name}: {e}")
 
-    for i, input_file in enumerate(downloaded_files):
-        split_input_tile(input_file, output_tiles, output_dir,
-                         tiles_written,
-                         input_count=i+1,
-                         input_total=len(downloaded_files))
 
     # Summary
     logger.info("=" * 50)

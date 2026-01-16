@@ -48,6 +48,7 @@ def make_tiles(iso2: str, output_dir: str = "."):
         gba_tiler.main(
             output_dir=str(outdir),
             iso2=iso2,
+            batch_size=10000,
         )
 
 def main():
