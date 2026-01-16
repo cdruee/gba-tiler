@@ -45,7 +45,6 @@ setup(
         "GDAL>=3.0.0",
     ],
     extras_require={
-        "progress": ["tqdm>=4.50.0"],
         "dev": [
             "setuptools_scm",
             "build",

@@ -7,7 +7,12 @@ GlobalBuildingAtlas Downloader and Tiler
 Downloads GeoJSON files from GlobalBuildingAtlas via rsync and splits them
 into smaller tiles with configurable resolution.
 
-Streaming version: Uses ijson for memory-efficient JSON parsing.
+Features:
+- Streaming JSON parsing with ijson for memory efficiency
+- Parallel processing for multi-file batches (default)
+- Real-time progress monitoring in both sequential and parallel modes
+- Automatic coordinate system conversion (EPSG:3857 ↔ EPSG:4326)
+- File locking for safe concurrent writes
 
 Note: Input files use EPSG:3857 (Web Mercator) coordinate system
 with coordinates in meters.
@@ -837,14 +842,25 @@ def _split_input_tile_impl(input_file: Path,
     """
     Implementation of split_input_tile with optional progress tracking.
     
+    Streams through a GeoJSON file, assigns each feature to the appropriate
+    output tile(s) based on bbox center, and writes in batches.
+    
     Args:
         input_file: Path to input GeoJSON file
-        output_tiles: List of output tile bounds (WGS84)
+        output_tiles: List of output tile bounds in WGS84 (lon_min, lat_max, lon_max, lat_min)
         output_dir: Directory to save output tiles
-        tiles_written: Dictionary tracking feature counts per tile
-        input_count: Current file number (for logging)
-        input_total: Total number of files (for logging)
-        progress_dict: Optional shared dict for progress tracking (parallel mode)
+        tiles_written: Dictionary tracking feature counts per tile (updated in-place)
+        input_count: Current file number for progress display (1-indexed)
+        input_total: Total number of files being processed
+        progress_dict: Optional shared dict for parallel progress tracking.
+                      If provided, updates progress_dict[filename] with:
+                      {'bytes': current_position, 'total': file_size}
+                      
+    Progress Behavior:
+        - If progress_dict is None (sequential mode):
+          Logs detailed progress every 10% or every 10 seconds
+        - If progress_dict is provided (parallel mode):
+          Updates shared dict for external monitoring, minimal logging
     """
     # logger.info(f"\n  Processing {input_file.name}...")
     
@@ -1578,7 +1594,8 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
     """
     Main execution function.
     
-    Can be called from command line or programmatically.
+    Downloads GBA building data for a specified area and splits it into tiles.
+    Supports both parallel (default) and sequential processing modes.
     
     Args:
         bbox: Tuple of (lon_min, lat_min, lon_max, lat_max) or None
@@ -1591,15 +1608,36 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         temp_dir: Temporary directory path (default: 'GBA_temp')
         sequential: Process files sequentially instead of in parallel (default: False)
     
-    Note:
+    Processing Modes:
+        Parallel (default, sequential=False):
+            - Uses multiple CPU cores for faster processing
+            - Shows combined progress every 10 seconds:
+              "Processing: 23% [10MB] 45% [20MB] 67% [30MB]"
+            - Recommended for batch operations
+        
+        Sequential (sequential=True):
+            - Processes one file at a time
+            - Shows detailed per-file progress:
+              "Processing (file 1/8): 23% [10.5 MB]"
+            - Recommended when you want to monitor individual files
+    
+    Logging:
         Logging level is inferred from the calling program's logging configuration.
         If no logging is configured, WARNING level is used.
+        Use setup_logging() to configure before calling main().
+    
+    Note:
         Exactly one of bbox, country, iso2, or iso3 must be provided.
     
     Example:
+        >>> # Parallel processing (default)
         >>> main(country="Germany", delta=0.05, batch_size=2000)
-        >>> main(bbox=(5.0, 45.0, 15.0, 55.0))
+        
+        >>> # Sequential processing with detailed progress
         >>> main(iso2="DE", output_dir="~/tiles", sequential=True)
+        
+        >>> # Bounding box
+        >>> main(bbox=(5.0, 45.0, 15.0, 55.0))
     """
     # If called from command line, parse arguments
     if bbox is None and country is None and iso2 is None and iso3 is None:

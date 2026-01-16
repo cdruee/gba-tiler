@@ -34,7 +34,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-progress = ["tqdm>=4.50.0"]
 dev = [
     "setuptools_scm",
     "build",

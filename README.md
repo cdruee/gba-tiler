@@ -24,13 +24,15 @@ and Level of Detail 1 (LoD1) 3D building models (GBA.LoD1).
 
 ## Features
 
-- **Flexible Area Selection**: Define areas by bounding box, country name, or ISO codes
-- **Python API**: Use programmatically from Python code with simple function calls
+- **Flexible Area Selection**: Define areas by bounding box or country name
+- **Parallel Processing**: Multi-core processing for faster batch operations (default)
 - **High Performance**: Streaming JSON parsing with spatial indexing (~70k features/sec)
 - **Memory Efficient**: Processes multi-GB files without loading into RAM
 - **Space Optimized**: Float precision limited to 1mm (3 decimal places)
+- **Progress Monitoring**: Real-time progress tracking in both sequential and parallel modes
 - **Standard GeoJSON**: Outputs include CRS metadata and tile bounding boxes
 - **CLI Interface**: Professional command-line interface with comprehensive help
+- **Python API**: Can be called programmatically from Python code
 
 ## Requirements
 
@@ -48,11 +50,7 @@ pip install ijson requests gdal
 
 ### Optional Dependencies
 
-```bash
-pip install tqdm
-```
-
-- **tqdm**: Progress bars (recommended)
+None required - all features work with base installation.
 
 ### System Requirements
 
@@ -65,23 +63,12 @@ pip install tqdm
 ### Option 1: Install from PyPI (Recommended)
 
 ```bash
-# Install the package
 pip install gba-tiler
-
-# With optional progress bars
-pip install gba-tiler[progress]
 ```
 
 After installation, the command is available globally:
 ```bash
 gba-tiler --help
-gba-tiler --version
-```
-
-For API usage in Python:
-```python
-import gba_tiler
-gba_tiler.main(country="Germany")
 ```
 
 ### Option 2: Install from Source
@@ -182,15 +169,37 @@ python gba_tiler.py --version
 
 ### Logging Options
 
-By default, the script runs silently (only shows errors). Use logging options for more output:
+By default, the script shows warnings and info messages. Use logging options to control verbosity:
 
 ```bash
-# Verbose output (shows progress)
+# Verbose output (shows detailed progress)
 python gba_tiler.py --country Germany --verbose
 
-# Debug output (shows detailed information)
+# Debug output (shows all debugging information)
 python gba_tiler.py --country Germany --debug
+
+# Quiet mode (errors only, faster parallel processing)
+python gba_tiler.py --country Germany --quiet
 ```
+
+### Processing Mode
+
+By default, files are processed in **parallel** for maximum speed. Use sequential mode for detailed per-file progress:
+
+```bash
+# Sequential processing (slower but shows detailed per-file progress)
+python gba_tiler.py --country Germany --sequential
+
+# Parallel processing (default - faster, shows combined progress every 10s)
+python gba_tiler.py --country Germany
+```
+
+**Processing Mode Comparison:**
+
+| Mode | Speed | Progress Display |
+|------|-------|------------------|
+| **Parallel** (default) | Fast (uses all CPU cores) | Combined: `Processing: 23% [10MB] 45% [20MB] 67% [30MB]` |
+| **Sequential** (`-1`) | Slower (one file at a time) | Per-file: `Processing (file 1/8): 23% [10.5 MB]` |
 
 ### Advanced Options
 
@@ -208,7 +217,7 @@ python gba_tiler.py --country Germany \
 ```
 usage: gba_tiler.py [-h] [--version]
                     (--bbox LON_MIN LAT_MIN LON_MAX LAT_MAX | --country NAME | --iso2 CODE | --iso3 CODE)
-                    [-v | --debug] [--delta DEGREES] [--batch-size N]
+                    [-v | --debug | -q] [-1] [--delta DEGREES] [--batch-size N]
                     [--output-dir DIR] [--temp-dir DIR]
 
 GlobalBuildingAtlas Downloader and Tiler
@@ -227,6 +236,11 @@ optional arguments:
   Logging (mutually exclusive):
   -v, --verbose         Enable verbose output (INFO level)
   --debug               Enable debug output (DEBUG level)
+  -q, --quiet           Quiet mode - errors only (ERROR level)
+  
+  Processing mode:
+  -1, --sequential      Process files sequentially instead of in parallel
+                        (slower but shows detailed per-file progress)
   
   Optional parameters:
   --delta DEGREES       Tile size in degrees (default: 0.10)
@@ -274,6 +288,7 @@ gba_tiler.main(
 - `batch_size`: Features per batch (default: `1000`)
 - `output_dir`: Output directory (default: `'GBA_tiles'`)
 - `temp_dir`: Temporary directory (default: `'GBA_temp'`)
+- `sequential`: Process files sequentially instead of in parallel (default: `False`)
 
 **Notes:**
 - Exactly one of `bbox`, `country`, `iso2`, or `iso3` must be provided
