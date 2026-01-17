@@ -1663,6 +1663,9 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         >>> # Bounding box
         >>> main(bbox=(5.0, 45.0, 15.0, 55.0))
     """
+    # Get logger for this module
+    logger = logging.getLogger(__name__)
+    
     # If called from command line, parse arguments
     if bbox is None and country is None and iso2 is None and iso3 is None:
         args = parse_args()
@@ -1681,7 +1684,6 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         
         # Handle deprecated --sequential flag
         if sequential:
-            logger = logging.getLogger(__name__)
             logger.warning("--sequential is deprecated, use --parallel 1 instead")
             parallel = 1
         
@@ -1694,7 +1696,6 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         
         # Handle deprecated sequential parameter
         if sequential:
-            logger = logging.getLogger(__name__)
             logger.warning("sequential parameter is deprecated, use parallel=1 instead")
             parallel = 1
         
