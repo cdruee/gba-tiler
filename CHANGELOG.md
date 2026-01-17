@@ -1,6 +1,31 @@
 # Changelog
 
 
+## [1.6.0] - 2025-01-17
+
+### Added:
+
+- Configurable parallel processing with `-p/--parallel N` option
+  - `0`: Automatic (CPU cores - 1, default)
+  - `1`: Sequential processing
+  - `2+`: Custom worker count
+- API parameter `parallel` for programmatic control
+
+### Changed:
+
+- Updated all documentation to reflect new parallel options
+
+### Deprecated:
+
+- `-1/--sequential` flag (use `-p 1` or `--parallel 1` instead)
+- `sequential` API parameter (use `parallel=1` instead)
+- Both deprecated options still work but emit deprecation warnings
+
+### Fixed:
+
+- Example script logging configuration (now uses basicConfig before import)
+
+
 ## [1.5.1]  - 2026-01-16
 
 ### Fixed:

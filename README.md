@@ -25,7 +25,7 @@ and Level of Detail 1 (LoD1) 3D building models (GBA.LoD1).
 ## Features
 
 - **Flexible Area Selection**: Define areas by bounding box or country name
-- **Parallel Processing**: Multi-core processing for faster batch operations (default)
+- **Configurable Parallel Processing**: Auto, sequential, or custom worker count
 - **High Performance**: Streaming JSON parsing with spatial indexing (~70k features/sec)
 - **Memory Efficient**: Processes multi-GB files without loading into RAM
 - **Space Optimized**: Float precision limited to 1mm (3 decimal places)
@@ -184,22 +184,34 @@ python gba_tiler.py --country Germany --quiet
 
 ### Processing Mode
 
-By default, files are processed in **parallel** for maximum speed. Use sequential mode for detailed per-file progress:
+Control the number of parallel workers with the `--parallel` (`-p`) option:
 
 ```bash
-# Sequential processing (slower but shows detailed per-file progress)
-python gba_tiler.py --country Germany --sequential
-
-# Parallel processing (default - faster, shows combined progress every 10s)
+# Automatic parallel (default - uses CPU cores - 1)
 python gba_tiler.py --country Germany
+
+# Sequential processing (detailed per-file progress)
+python gba_tiler.py --country Germany --parallel 1
+
+# Custom worker count (e.g., 4 workers)
+python gba_tiler.py --country Germany --parallel 4
+
+# Legacy sequential flag (deprecated, use --parallel 1)
+python gba_tiler.py --country Germany --sequential
 ```
 
 **Processing Mode Comparison:**
 
-| Mode | Speed | Progress Display |
-|------|-------|------------------|
-| **Parallel** (default) | Fast (uses all CPU cores) | Combined: `Processing: 23% [10MB] 45% [20MB] 67% [30MB]` |
-| **Sequential** (`-1`) | Slower (one file at a time) | Per-file: `Processing (file 1/8): 23% [10.5 MB]` |
+| Mode | Workers | Speed | Progress Display |
+|------|---------|-------|------------------|
+| **Automatic** (`-p 0` or default) | CPU - 1 | Fast | Combined: `Processing: 23% [10MB] 45% [20MB]` |
+| **Sequential** (`-p 1`) | 1 | Slower | Per-file: `Processing (file 1/8): 23% [10.5 MB]` |
+| **Custom** (`-p 4`) | 4 | Configurable | Combined: `Processing: 23% [10MB] 45% [20MB]` |
+
+**When to use each mode:**
+- **Automatic** (default): Best for most use cases, maximizes performance
+- **Sequential** (`-p 1`): When you need detailed per-file monitoring
+- **Custom** (`-p N`): On resource-constrained systems or when fine-tuning performance
 
 ### Advanced Options
 
@@ -217,7 +229,7 @@ python gba_tiler.py --country Germany \
 ```
 usage: gba_tiler.py [-h] [--version]
                     (--bbox LON_MIN LAT_MIN LON_MAX LAT_MAX | --country NAME | --iso2 CODE | --iso3 CODE)
-                    [-v | --debug | -q] [-1] [--delta DEGREES] [--batch-size N]
+                    [-v | --debug | -q] [-p N] [-1] [--delta DEGREES] [--batch-size N]
                     [--output-dir DIR] [--temp-dir DIR]
 
 GlobalBuildingAtlas Downloader and Tiler
@@ -239,8 +251,11 @@ optional arguments:
   -q, --quiet           Quiet mode - errors only (ERROR level)
   
   Processing mode:
-  -1, --sequential      Process files sequentially instead of in parallel
-                        (slower but shows detailed per-file progress)
+  -p N, --parallel N    Number of parallel workers (default: 0)
+                        0 = automatic (CPU cores - 1)
+                        1 = sequential processing
+                        2+ = specific worker count
+  -1, --sequential      [DEPRECATED] Use --parallel 1 instead
   
   Optional parameters:
   --delta DEGREES       Tile size in degrees (default: 0.10)
@@ -260,7 +275,7 @@ import gba_tiler
 # Optional: Configure logging before importing
 logging.basicConfig(level=logging.INFO)
 
-# Process by country name
+# Process by country name (automatic parallel)
 gba_tiler.main(country="Luxembourg")
 
 # Process by ISO code with custom settings
@@ -268,16 +283,25 @@ gba_tiler.main(
     iso2="DE",
     delta=0.05,
     batch_size=2000,
-    output_dir="germany_tiles"
+    output_dir="germany_tiles",
+    parallel=4  # Use 4 workers
 )
 
-# Process by bounding box
+# Process by bounding box (sequential mode)
 gba_tiler.main(
     bbox=(11.3, 48.0, 11.8, 48.3),
     delta=0.01,
-    output_dir="munich_tiles"
+    output_dir="munich_tiles",
+    parallel=1  # Sequential processing
 )
+
+# Automatic parallel (default)
+gba_tiler.main(country="France")  # parallel=0 by default
 ```
+
+**API Parameters:**
+- `parallel`: Number of workers (0=auto, 1=sequential, 2+=custom)
+- `sequential`: [DEPRECATED] Use `parallel=1` instead
 
 **Parameters:**
 - `bbox`: Tuple of `(lon_min, lat_min, lon_max, lat_max)` or `None`

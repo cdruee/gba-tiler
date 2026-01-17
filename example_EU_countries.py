@@ -7,7 +7,7 @@ and former Yugoslavia countries. For each country:
 1. Downloads and tiles building data using gba_tiler
 2. Compresses tiles into a tar.xz archive
 
-Requires countries_EU.csv in the GBA_tiles_x directory.
+Requires countries_EU.csv in the GBA_tiles directory.
 """
 
 import csv
@@ -17,12 +17,20 @@ import os
 from pathlib import Path
 import tarfile
 
+# Configure logging BEFORE importing gba_tiler
+# This ensures gba_tiler respects our logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+
 import gba_tiler
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
 
 TILES_DIR = Path("GBA_tiles")
+PROCESSES = 0  # auto parallel (CPU cores - 1)
+
 
 def compress_tiles(iso2: str):
     """Compress GBA tiles using Python's built-in lzma."""
@@ -46,6 +54,7 @@ def make_tiles(iso2: str, output_dir: str = "."):
         outdir = TILES_DIR / iso2.lower()
         outdir.mkdir(parents=True, exist_ok=True)
         gba_tiler.main(
+            parallel=PROCESSES,
             output_dir=str(outdir),
             iso2=iso2,
             batch_size=10000,

@@ -9,10 +9,15 @@ into smaller tiles with configurable resolution.
 
 Features:
 - Streaming JSON parsing with ijson for memory efficiency
-- Parallel processing for multi-file batches (default)
+- Configurable parallel processing (auto, sequential, or custom worker count)
 - Real-time progress monitoring in both sequential and parallel modes
 - Automatic coordinate system conversion (EPSG:3857 ↔ EPSG:4326)
 - File locking for safe concurrent writes
+
+Processing Modes:
+- Automatic parallel (default): Uses CPU cores - 1 for optimal performance
+- Sequential: Detailed per-file progress monitoring
+- Custom parallel: Specify exact worker count for resource control
 
 Note: Input files use EPSG:3857 (Web Mercator) coordinate system
 with coordinates in meters.
@@ -1520,9 +1525,16 @@ Examples:
     
     # Processing mode
     parser.add_argument(
+        '-p', '--parallel',
+        type=int,
+        default=0,
+        metavar='N',
+        help='Number of parallel workers (0=auto, 1=sequential, 2+=specific count)'
+    )
+    parser.add_argument(
         '-1', '--sequential',
         action='store_true',
-        help='Process files sequentially instead of in parallel (slower but shows detailed progress)'
+        help='[DEPRECATED: use -p 1] Process files sequentially (alias for --parallel 1)'
     )
 
     # Optional parameters
@@ -1590,12 +1602,12 @@ def setup_logging(verbose: bool = False, debug: bool = False, quiet: bool = Fals
 def main(bbox=None, country=None, iso2=None, iso3=None, 
          delta=0.10, batch_size=1000, 
          output_dir='GBA_tiles', temp_dir='GBA_temp',
-         sequential=False):
+         parallel=0, sequential=False):
     """
     Main execution function.
     
     Downloads GBA building data for a specified area and splits it into tiles.
-    Supports both parallel (default) and sequential processing modes.
+    Supports configurable parallel processing.
     
     Args:
         bbox: Tuple of (lon_min, lat_min, lon_max, lat_max) or None
@@ -1606,20 +1618,29 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         batch_size: Features per write batch (default: 1000)
         output_dir: Output directory path (default: 'GBA_tiles')
         temp_dir: Temporary directory path (default: 'GBA_temp')
-        sequential: Process files sequentially instead of in parallel (default: False)
+        parallel: Number of parallel workers (default: 0)
+            - 0: Automatic (CPU count - 1)
+            - 1: Sequential processing
+            - 2+: Specific number of workers
+        sequential: [DEPRECATED] Use parallel=1 instead (default: False)
     
     Processing Modes:
-        Parallel (default, sequential=False):
-            - Uses multiple CPU cores for faster processing
+        Automatic parallel (default, parallel=0):
+            - Uses CPU cores - 1 for optimal performance
             - Shows combined progress every 10 seconds:
               "Processing: 23% [10MB] 45% [20MB] 67% [30MB]"
             - Recommended for batch operations
         
-        Sequential (sequential=True):
+        Sequential (parallel=1):
             - Processes one file at a time
             - Shows detailed per-file progress:
               "Processing (file 1/8): 23% [10.5 MB]"
             - Recommended when you want to monitor individual files
+        
+        Custom parallel (parallel=2+):
+            - Uses specified number of workers
+            - Shows combined progress like automatic mode
+            - Useful for resource-constrained systems
     
     Logging:
         Logging level is inferred from the calling program's logging configuration.
@@ -1630,11 +1651,14 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         Exactly one of bbox, country, iso2, or iso3 must be provided.
     
     Example:
-        >>> # Parallel processing (default)
+        >>> # Automatic parallel processing (default)
         >>> main(country="Germany", delta=0.05, batch_size=2000)
         
         >>> # Sequential processing with detailed progress
-        >>> main(iso2="DE", output_dir="~/tiles", sequential=True)
+        >>> main(iso2="DE", output_dir="~/tiles", parallel=1)
+        
+        >>> # Custom worker count
+        >>> main(country="France", parallel=4)
         
         >>> # Bounding box
         >>> main(bbox=(5.0, 45.0, 15.0, 55.0))
@@ -1648,14 +1672,35 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
         iso3 = args.iso3
         delta = args.delta
         batch_size = args.batch_size
+        parallel = args.parallel
         sequential = args.sequential
         output_dir = args.output_dir
         temp_dir = args.temp_dir
         # Only set up logging if called from CLI
         setup_logging(args.verbose, args.debug, args.quiet)
+        
+        # Handle deprecated --sequential flag
+        if sequential:
+            logger = logging.getLogger(__name__)
+            logger.warning("--sequential is deprecated, use --parallel 1 instead")
+            parallel = 1
+        
+        # Validate parallel parameter
+        if parallel < 0:
+            raise ValueError(f"--parallel must be >= 0 (got {parallel})")
     else:
         # Called programmatically - ensure logging is configured
         setup_logging()
+        
+        # Handle deprecated sequential parameter
+        if sequential:
+            logger = logging.getLogger(__name__)
+            logger.warning("sequential parameter is deprecated, use parallel=1 instead")
+            parallel = 1
+        
+        # Validate parallel parameter
+        if parallel < 0:
+            raise ValueError(f"parallel must be >= 0 (got {parallel})")
         
         # Validate that exactly one area specification is provided
         area_specs = sum([bbox is not None, country is not None, 
@@ -1757,10 +1802,18 @@ def main(bbox=None, country=None, iso2=None, iso3=None,
     tiles_written = {}  # Track feature counts per output tile
     
     # Determine number of worker processes
-    num_workers = max(1, multiprocessing.cpu_count() - 1)
+    if parallel == 0:
+        # Automatic: CPU count - 1
+        num_workers = max(1, multiprocessing.cpu_count() - 1)
+    elif parallel == 1:
+        # Sequential mode
+        num_workers = 1
+    else:
+        # User-specified worker count
+        num_workers = parallel
     
-    # Decide on parallel vs sequential processing based on --sequential flag
-    if sequential or len(downloaded_files) == 1 or num_workers == 1:
+    # Decide on parallel vs sequential processing
+    if parallel == 1 or len(downloaded_files) == 1:
         logger.info(f"Sequential processing - {len(downloaded_files)} file(s)")
         use_parallel = False
     else:
